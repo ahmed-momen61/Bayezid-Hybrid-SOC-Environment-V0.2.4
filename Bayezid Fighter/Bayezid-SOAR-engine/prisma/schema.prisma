@@ -1,0 +1,46 @@
+// 1. إعدادات مكتبة Prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 2. إعدادات الاتصال بـ Supabase
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 3. جدول الإنذارات (متحدث لدعم الـ MITRE والـ CTI)
+model Alert {
+  id                 String   @id @default(uuid())
+  sourceIp           String
+  targetServer       String
+  eventType          String
+  attempts           Int      @default(1)
+  
+  // Basic Analysis
+  severity           String?
+  threatType         String?
+  recommendedAction  String?
+  status             String   @default("NEW")
+  
+  // Advanced AI & CTI Analysis
+  cvssScore          String?
+  cweId              String?
+  mitreTactic        String?
+  mitreTechnique     String?
+  killChainPhase     String?
+  predictedSteps     String?
+  businessContinuity String?
+  osintData          Json?    
+  
+  createdAt          DateTime @default(now())
+}
+
+// 4. جدول الرد الآلي
+model Playbook {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String
+  actions     Json
+  createdAt   DateTime @default(now())
+}

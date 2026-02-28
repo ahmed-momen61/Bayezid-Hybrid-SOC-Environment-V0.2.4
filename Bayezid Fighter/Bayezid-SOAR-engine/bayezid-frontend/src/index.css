@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------
+   BAYEZID SOAR GLOBAL STYLES
+   --------------------------------------------------------- */
+
+:root {
+    color-scheme: dark;
+}
+
+body {
+    margin: 0;
+    background-color: #0a0a0b;
+    color: #e4e4e7;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+    width: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #1f1f23;
+    border-radius: 10px;
+}
+
+
+/* تخصيص ألوان Tailwind v4 الإضافية يدويًا (اختياري) */
+
+@layer components {
+    :root {
+        --color-cyber-black: #0a0a0b;
+        --color-cyber-dark: #121214;
+        --color-cyber-border: #1f1f23;
+        --color-cyber-green: #00ff9d;
+    }
+}
