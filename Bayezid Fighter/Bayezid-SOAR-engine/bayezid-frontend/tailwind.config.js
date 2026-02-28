@@ -7,7 +7,6 @@ export default {
     theme: {
         extend: {
             colors: {
-                // ألوان السايبر سكيورتي المفضلة
                 cyber: {
                     black: '#0a0a0b',
                     dark: '#121214',

@@ -11,7 +11,6 @@ const App = () => {
   const [alerts, setAlerts] = useState([]);
   const [selectedAlert, setSelectedAlert] = useState(null);
   
-  // State للفورم (Simulator)
   const [simData, setSimData] = useState({
     source_ip: '192.168.1.50',
     event_type: 'Brute Force Attempt',
@@ -108,7 +107,7 @@ const App = () => {
           </div>
         )}
 
-        {/* --- Tab 2: Threat Simulator (بدل بوستمان) --- */}
+        {}
         {activeTab === 'simulator' && (
           <div className="max-w-2xl mx-auto space-y-8 animate-in slide-in-from-bottom-4 duration-500">
             <h2 className="text-2xl font-bold text-white">Manual Threat Injection</h2>
@@ -136,7 +135,7 @@ const App = () => {
 
       </main>
 
-      {/* --- AI Forensic Modal (التفاعلية والرسومات) --- */}
+      {}
       {selectedAlert && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="bg-[#121214] border border-white/10 w-full max-w-5xl h-[85vh] rounded-3xl overflow-hidden flex flex-col modal-animate">
@@ -150,7 +149,7 @@ const App = () => {
             </div>
 
             <div className="flex flex-1 overflow-hidden">
-              {/* Left Side: Stats & Charts */}
+              {}
               <div className="w-1/3 border-r border-white/5 p-8 space-y-10 overflow-y-auto custom-scrollbar">
                 
                 <div className="space-y-4">
@@ -184,7 +183,7 @@ const App = () => {
                 </div>
               </div>
 
-              {/* Right Side: Narrative & Playbook */}
+              {}
               <div className="flex-1 p-10 overflow-y-auto custom-scrollbar space-y-10">
                 <section className="space-y-4">
                   <h4 className="text-xs font-bold text-white flex items-center gap-2"><Activity size={16}/> Incident Narrative</h4>
@@ -214,7 +213,6 @@ const App = () => {
   );
 };
 
-// Helper Components
 const NavBtn = ({ active, onClick, icon, label }) => (
   <button onClick={onClick} className={`flex items-center gap-3 p-3 rounded-xl transition-all ${active ? 'bg-emerald-500/10 text-emerald-500 shadow-lg shadow-emerald-500/5' : 'text-zinc-500 hover:text-white hover:bg-white/5'}`}>
     {icon} <span className="text-xs font-bold uppercase tracking-wider">{label}</span>

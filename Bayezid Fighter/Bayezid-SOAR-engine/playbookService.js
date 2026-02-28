@@ -4,10 +4,8 @@ const prisma = new PrismaClient();
 const executePlaybook = async(alertId, analysisResult, alertData) => {
     console.log(`\n[▶] Initiating Playbook for Threat: ${analysisResult.threat_type}`);
 
-    // بنجهز الخطوات اللي السيستم هينفذها بناءً على مستوى الخطورة
     let actionSteps = [];
 
-    // بنعمل اسم مميز للـ Playbook عشان ميتكررش في الداتا بيز
     const uniquePlaybookName = `PB-${alertData.event_type}-${Date.now()}`;
 
     if (analysisResult.severity === 'CRITICAL' || analysisResult.severity === 'HIGH') {
@@ -24,12 +22,11 @@ const executePlaybook = async(alertId, analysisResult, alertData) => {
     }
 
     try {
-        // بنسيف الـ Playbook في قاعدة بيانات Supabase
         const savedPlaybook = await prisma.playbook.create({
             data: {
                 name: uniquePlaybookName,
                 description: `Automated mitigation response for ${analysisResult.threat_type} triggered by Alert ID: ${alertId}`,
-                actions: actionSteps // Prisma هتحول الـ Array ده لـ JSON أوتوماتيك
+                actions: actionSteps
             }
         });
 

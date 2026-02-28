@@ -3,7 +3,6 @@ const dotenv = require('dotenv');
 const { PrismaClient } = require('@prisma/client');
 const path = require('path');
 
-// استدعاء كل المحركات والخدمات
 const { analyzeWithVertexAI, analyzeWithLocalModel } = require('./aiService');
 const { executePlaybook } = require('./playbookService');
 const { enrichWithOSINT } = require('./osintService');
@@ -18,10 +17,8 @@ const app = express();
 app.use(express.json());
 app.use(express.text());
 
-// --- [ 🖥️ تشغيل الـ Web Dashboard ] ---
 app.use(express.static(path.join(__dirname, 'public')));
 
-// --- [ 📊 Endpoint للداشبورد عشان تسحب الأحداث لايف (History) ] ---
 app.get('/api/v1/alerts', async(req, res) => {
     try {
         const alerts = await prisma.alert.findMany({
@@ -35,7 +32,6 @@ app.get('/api/v1/alerts', async(req, res) => {
     }
 });
 
-// --- [ 🛡️ معالجة الهجمات ] ---
 const handleSecurityAlert = async(req, res) => {
     let source_ip, event_type, target_server;
     let rawData = req.body;
@@ -187,7 +183,6 @@ const handleSecurityAlert = async(req, res) => {
 
 app.post('/api/v1/alerts/ingest', handleSecurityAlert);
 
-// --- [ 🎯 Endpoint جديد للـ Simulation ] ---
 const handleSimulationRun = async(req, res) => {
     const { attackType, logFormat, logData, parameters } = req.body;
 
@@ -196,7 +191,6 @@ const handleSimulationRun = async(req, res) => {
     try {
         let parsedLogs;
 
-        // معالجة نوع اللوجات (Raw أو JSON)
         if (logFormat === 'json') {
             try {
                 parsedLogs = typeof logData === 'string' ? JSON.parse(logData) : logData;
@@ -204,30 +198,26 @@ const handleSimulationRun = async(req, res) => {
                 return res.status(400).json({ error: 'Invalid JSON format in logData' });
             }
         } else if (logFormat === 'raw') {
-            // تحويل الـ Raw logs لمصفوفة سطور
             parsedLogs = logData.split('\n').filter(line => line.trim() !== '');
         } else {
             return res.status(400).json({ error: 'Invalid log format selected' });
         }
 
-        // حفظ محاولة السيميوليشن في الداتابيز عشان تظهر في الداشبورد
         const simulationAlert = await prisma.alert.create({
             data: {
                 sourceIp: "SIMULATION-TEST",
                 targetServer: "Local-Env",
                 eventType: `Simulated: ${attackType}`,
                 status: "ANALYZED",
-                severity: "INFO", // ممكن تخليها ديناميك لو حابب
+                severity: "INFO",
                 threatType: "Simulation Activity",
                 recommendedAction: "Review simulated logs and parameters",
-                // حطينا البرامترز كداتا إضافية في حقل الـ osintData أو ممكن تخليها في حقل مخصص لو موجود
                 osintData: parameters ? { custom_parameters: parameters } : null
             }
         });
 
         console.log(`[✔] Simulation Logged to DB (ID: ${simulationAlert.id})`);
 
-        // الرد على الفرونت إند بنجاح العملية
         res.status(200).json({
             status: 'success',
             message: 'Simulation executed and logged successfully',
@@ -244,7 +234,6 @@ const handleSimulationRun = async(req, res) => {
     }
 };
 
-// ربط الفانكشن بالـ Route الخاص بيها
 app.post('/api/v1/simulation/run', handleSimulationRun);
 
 

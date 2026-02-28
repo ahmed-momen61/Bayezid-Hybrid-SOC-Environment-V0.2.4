@@ -1,9 +1,4 @@
 @import "tailwindcss";
-
-/* ---------------------------------------------------------
-   BAYEZID SOAR GLOBAL STYLES
-   --------------------------------------------------------- */
-
 :root {
     color-scheme: dark;
 }
@@ -24,11 +19,8 @@ body {
     border-radius: 10px;
 }
 
-
-/* تخصيص ألوان Tailwind v4 الإضافية يدويًا (اختياري) */
-
 @layer components {
-    :root {
+     :root {
         --color-cyber-black: #0a0a0b;
         --color-cyber-dark: #121214;
         --color-cyber-border: #1f1f23;

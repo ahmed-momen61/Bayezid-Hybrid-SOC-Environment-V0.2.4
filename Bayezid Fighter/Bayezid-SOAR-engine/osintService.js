@@ -14,7 +14,6 @@ const enrichWithOSINT = async(ipAddress) => {
             ip: ipAddress,
             country: response.data.country || "Unknown",
             city: response.data.city || "Unknown",
-            // استخدمنا الطريقة الكلاسيكية المضمونة:
             isp: response.data.connection ? response.data.connection.isp : "Unknown",
             threat_actor_suspicion: "Checking global blacklists...",
             reputation_score: response.data.country === "Russia" || response.data.country === "China" ? "HIGH RISK" : "MODERATE RISK",

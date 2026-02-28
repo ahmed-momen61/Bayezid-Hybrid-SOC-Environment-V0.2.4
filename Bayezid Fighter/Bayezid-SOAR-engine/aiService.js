@@ -1,24 +1,18 @@
 const axios = require('axios');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { enrichContext } = require('./ragService'); // محرك الـ Hybrid RAG
+const { enrichContext } = require('./ragService');
 require('dotenv').config();
 
-// ============================================================================
-// 🛡️ دالة التعقيم العميقة (Deep Data Sanitizer)
-// بتلف جوه الـ JSON بالكامل وتصلح أي هلوسة في أي مستوى
-// ============================================================================
+
 const deepSanitize = (obj) => {
     if (typeof obj !== 'object' || obj === null) return;
     for (let key in obj) {
-        // لو لقى أي مصفوفة في أي مفتاح يخص الـ Action، يدمجها فوراً
         if (key.toLowerCase().includes('recommend') && Array.isArray(obj[key])) {
             obj[key] = obj[key].join('\n');
         }
-        // لو لقى أي مفتاح يخص الـ CVSS، يحوله لنص إجباري
         if (key.toLowerCase().includes('cvss')) {
             obj[key] = String(obj[key]);
         }
-        // لو الموديل عامل Nested Object، الدالة تدخل تعقمه من جوه
         if (typeof obj[key] === 'object') {
             deepSanitize(obj[key]);
         }
@@ -26,9 +20,7 @@ const deepSanitize = (obj) => {
     return obj;
 };
 
-// ============================================================================
-// ☁️ 1. محرك الكلاود المدعوم بالاستخبارات (Google Gemini 2.5 Flash + RAG)
-// ============================================================================
+
 const analyzeWithVertexAI = async(alertData) => {
     console.log('\n[☁️] Sending Data to Cloud AI (Google Gemini 2.5 Flash)...');
 
@@ -68,7 +60,6 @@ const analyzeWithVertexAI = async(alertData) => {
         text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
         let aiResponse = JSON.parse(text);
 
-        // تفعيل درع الحماية العميق
         aiResponse = deepSanitize(aiResponse);
 
         return {
@@ -87,19 +78,15 @@ const analyzeWithVertexAI = async(alertData) => {
     }
 };
 
-// ============================================================================
-// 🏠🔥 2. محرك اللوكال الصاروخي (Single-Model Multi-Role: Qwen 2.5 + Deep RAG)
-// ============================================================================
+
 const analyzeWithLocalModel = async(alertData) => {
     console.log('\n[🏠] Initiating High-Speed Local Architecture (Powered by Qwen 2.5)...');
     const safeDataString = typeof alertData === 'string' ? alertData : JSON.stringify(alertData);
 
-    // سحب الاستخبارات 
     const injectedContext = await enrichContext(safeDataString);
     console.log(`[📚] Hybrid Intel Injected.`);
 
     try {
-        // --- 🕵️‍♂️ الدور الأول (المحقق - Qwen 2.5 Coder) ---
         console.log(`\n[🕵️‍♂️] Role 1 (Detective) is extracting artifacts...`);
         const detectivePrompt = `You are a Lead Cyber Forensic Investigator. Read the following security event and extract ALL technical artifacts.
         Event Data: ${safeDataString}
@@ -117,7 +104,6 @@ const analyzeWithLocalModel = async(alertData) => {
         const extractedFacts = detectiveResponse.data.response;
         console.log(`[✔] Detective Extracted Facts successfully.`);
 
-        // --- 🎖️ الدور الثاني (الجنرال - Qwen 2.5 Coder) ---
         console.log(`\n[🎖️] Role 2 (Commander) is formulating the Strategic JSON Report...`);
         const commanderPrompt = `You are an Elite Tier 3 Cybersecurity Incident Commander.
         
@@ -162,7 +148,6 @@ const analyzeWithLocalModel = async(alertData) => {
 
         let finalReport = JSON.parse(localText);
 
-        // تفعيل درع الحماية العميق
         finalReport = deepSanitize(finalReport);
 
         return {
