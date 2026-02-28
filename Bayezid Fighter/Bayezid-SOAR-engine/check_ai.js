@@ -4,7 +4,7 @@ require('dotenv').config();
 async function checkGoogleModels() {
     const apiKey = process.env.GOOGLE_API_KEY;
 
-    if (!apiKey || apiKey === "AIzaSyD0whqQuIkRiavSj75PxS7m9zja7fw4-P4") {
+    if (!apiKey || apiKey === "u wannna get my api key !!! fuck off ;) ") {
         console.log("\n[❌] ERROR: API Key is missing or invalid in .env file.");
         return;
     }
