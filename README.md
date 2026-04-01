@@ -1,4 +1,4 @@
-# 🛡️ Bayezid Cognitive SOAR V0.3.1 (The Intel Update)
+# 🛡️ Bayezid Cognitive SOAR V0.2.1 (The Intel Update)
 
 ![Version](https://img.shields.io/badge/Version-2.1-blue.svg)
 ![Node.js](https://img.shields.io/badge/Node.js-18.x-green.svg)
