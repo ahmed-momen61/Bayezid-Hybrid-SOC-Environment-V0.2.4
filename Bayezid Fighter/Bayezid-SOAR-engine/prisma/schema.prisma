@@ -19,7 +19,10 @@ model Alert {
   severity           String?
   threatType         String?
   recommendedAction  String?
+  
   status             String   @default("NEW")
+  
+  confidenceType     String   @default("PROBABILISTIC")
   
   // Advanced AI & CTI Analysis
   cvssScore          String?
@@ -30,6 +33,8 @@ model Alert {
   predictedSteps     String?
   businessContinuity String?
   osintData          Json?    
+  
+  messages           ChatMessage[]
   
   createdAt          DateTime @default(now())
 }
@@ -51,4 +56,23 @@ model RedSwarmLog {
   executionOutput String?  @db.Text 
   isSuccess       Boolean? 
   createdAt       DateTime @default(now())
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  content   String   @db.Text
+  sender    String   
+  role      String   
+  
+  alertId   String
+  alert     Alert    @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+}
+
+model SystemConfig {
+  id        String   @id @default("current") // دايماً هنستخدم id واحد
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
 }

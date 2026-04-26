@@ -44,11 +44,17 @@ const analyzeWithVertexAI = async(alertData) => {
         [THREAT INTELLIGENCE CONTEXT]
         ${injectedContext}
 
+        [DECISION MATRIX RULE]
+        You must classify the attack's 'confidence_type':
+        - Use "DETERMINISTIC" if the threat is undeniable and requires instant Auto-Kill (e.g., Brute Force, DDoS, Known Malware hashes, clear SQLi/RCE).
+        - Use "PROBABILISTIC" if the threat is anomalous and needs human validation in a War Room (e.g., Impossible Travel, Internal Port Scanning, Privilege Escalation that might be a Sysadmin).
+
         Analyze the security data using the provided threat intelligence context.
         You MUST respond ONLY with a valid JSON object matching this exact format:
         {
             "is_false_positive": false,
             "confidence_score": "e.g., 99%",
+            "confidence_type": "DETERMINISTIC or PROBABILISTIC",
             "extracted_ip": "Primary source IP",
             "extracted_iocs": {
                 "ips": ["All malicious IPs found"],
@@ -128,14 +134,15 @@ const analyzeWithLocalModel = async(alertData) => {
         [STRICT ANALYSIS FRAMEWORK]:
         1. Deep Narrative: Write a comprehensive, multi-sentence story in 'detailed_report' explaining HOW the attack happened using the artifacts.
         2. Strict JSON Formatting: Your 'cvss_score' MUST be exactly a string like "9.8". NO extra characters.
-        3. Extract IoCs: Accurately populate the 'extracted_iocs' and 'related_cves' arrays based on the detective's artifacts.
-        4. Strategic Action: Provide EXACTLY 6 to 8 numbered steps in 'recommended_action' as a single string, NOT an array. 
-        5. Accuracy: Use the provided Threat Intel for CWE and MITRE IDs.
+        3. Decision Matrix: You must evaluate the 'confidence_type'. Set it to "DETERMINISTIC" for absolute threats (DDoS, Malware, Brute Force). Set it to "PROBABILISTIC" for anomalies (Impossible Travel, weird internal traffic).
+        4. Extract IoCs: Accurately populate the 'extracted_iocs' and 'related_cves' arrays based on the detective's artifacts.
+        5. Strategic Action: Provide EXACTLY 6 to 8 numbered steps in 'recommended_action' as a single string, NOT an array. 
 
         You MUST respond ONLY with a valid JSON object matching this exact format, NO markdown:
         {
             "is_false_positive": false,
             "confidence_score": "99%",
+            "confidence_type": "DETERMINISTIC",
             "extracted_ip": "IP address",
             "extracted_iocs": {
                 "ips": ["..."],

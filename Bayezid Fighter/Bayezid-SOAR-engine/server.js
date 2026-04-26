@@ -3,7 +3,7 @@ const readline = require('readline');
 const dotenv = require('dotenv');
 const { PrismaClient } = require('@prisma/client');
 const path = require('path');
-
+const { processTuningCommand, liveConfig } = require('./tuningService');
 const { analyzeWithVertexAI, analyzeWithLocalModel, orchestrateRedSwarm, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent } = require('./aiService');
 const { executePlaybook } = require('./playbookService');
 const { enrichWithOSINT } = require('./osintService');
@@ -66,37 +66,39 @@ const handleSecurityAlert = async(req, res) => {
     }
 
     try {
+        // 2. Enhanced Semantic Caching & Deduplication (منع التكرار)
         if (isJson && source_ip !== "Extracting...") {
-            const recentAnalysis = await prisma.alert.findFirst({
+            const timeLimit = new Date(Date.now() - 60 * 60 * 1000); // خلال آخر ساعة
+
+            const existingAlert = await prisma.alert.findFirst({
                 where: {
-                    sourceIp: source_ip,
-                    status: { in: ["ANALYZED", "FALSE_POSITIVE"] },
-                    createdAt: { gte: new Date(Date.now() - 10 * 60 * 1000) }
+                    sourceIp: source_ip, // لو نفس الـ IP
+                    createdAt: { gte: timeLimit }
                 },
                 orderBy: { createdAt: 'desc' }
             });
 
-            if (recentAnalysis) {
-                console.log(`[⚡] Cache Hit! Reusing recent analysis for ${source_ip}`);
+            if (existingAlert) {
+                console.log(`\n[♻️] CACHE HIT: Attack from ${source_ip} is already tracked! (Alert ID: ${existingAlert.id})`);
+                console.log(`[!] Current Status: ${existingAlert.status}. Skipping AI Analysis & Playbooks.`);
+
+                // نزود عداد المحاولات فقط في الداتا بيز
+                await prisma.alert.update({
+                    where: { id: existingAlert.id },
+                    data: { attempts: (existingAlert.attempts || 1) + 1 }
+                });
+
                 return res.status(200).json({
                     status: 'success',
                     cached: true,
-                    is_false_positive: recentAnalysis.status === "FALSE_POSITIVE",
+                    message: "Threat is already tracked and handled by the SOC.",
+                    alert_status: existingAlert.status,
                     analysis: {
-                        severity: recentAnalysis.severity,
-                        threat_type: recentAnalysis.threatType,
-                        recommended_action: recentAnalysis.recommendedAction,
-                        cvss_score: recentAnalysis.cvssScore,
-                        cwe_id: recentAnalysis.cweId,
-                        mitre_attack: { tactic: recentAnalysis.mitreTactic, technique: recentAnalysis.mitreTechnique },
-                        kill_chain_phase: recentAnalysis.killChainPhase,
-                        predicted_next_steps: recentAnalysis.predictedSteps,
-                        business_continuity_analysis: recentAnalysis.businessContinuity,
-                        engine_used: 'Semantic Cache (Fast Path ⚡)'
+                        threat_type: existingAlert.threatType,
+                        severity: existingAlert.severity
                     },
-                    osint: recentAnalysis.osintData ? recentAnalysis.osintData : null,
                     playbook_executed: false,
-                    playbook_details: "Skipped (Action already taken in previous alert)"
+                    playbook_details: "Skipped (Duplicate Activity)"
                 });
             }
         }
@@ -143,6 +145,14 @@ const handleSecurityAlert = async(req, res) => {
             ctiData = await enrichWithCTI(aiResponse.extracted_iocs, aiResponse.related_cves);
         }
 
+        let alertStatus = "ANALYZED";
+        if (aiResponse.is_false_positive) {
+            alertStatus = "FALSE_POSITIVE";
+        } else if (aiResponse.confidence_type === 'PROBABILISTIC') {
+            alertStatus = "WAITING_FOR_APPROVAL"; // 🔴 هنا بنوقف التنفيذ ونبعتها للمراجعة
+        }
+
+        // 2. تحديث الداتا بيز بالحالة الجديدة ونوع الثقة
         const updatedAlert = await prisma.alert.update({
             where: { id: savedAlert.id },
             data: {
@@ -150,6 +160,7 @@ const handleSecurityAlert = async(req, res) => {
                 severity: aiResponse.severity,
                 threatType: aiResponse.threat_type,
                 recommendedAction: aiResponse.recommended_action,
+                confidenceType: aiResponse.confidence_type || "PROBABILISTIC", // حفظ نوع الثقة
                 cvssScore: aiResponse.cvss_score,
                 cweId: aiResponse.cwe_id,
                 mitreTactic: aiResponse.mitre_attack ? aiResponse.mitre_attack.tactic : null,
@@ -161,17 +172,29 @@ const handleSecurityAlert = async(req, res) => {
                     osint: osintData,
                     cti: ctiData
                 },
-                status: aiResponse.is_false_positive ? "FALSE_POSITIVE" : "ANALYZED"
+                status: alertStatus
             }
         });
-        console.log(`[✔] Cognitive Analysis & CTI Saved: ${aiResponse.threat_type}`);
+        console.log(`[✔] Cognitive Analysis Saved. Status: ${alertStatus} | Type: ${aiResponse.confidence_type}`);
 
+        // 3. قرار تنفيذ الـ Playbook (Execution Engine)
         let playbookResult = null;
-        if (!aiResponse.is_false_positive && (aiResponse.severity === 'HIGH' || aiResponse.severity === 'CRITICAL')) {
+
+        // 🔴 الشرط الجديد: لازم ميكونش False Positive، ويكون Severity عالي، ويكون DETERMINISTIC (مؤكد)
+        const shouldExecutePlaybook = !aiResponse.is_false_positive &&
+            (aiResponse.severity === 'HIGH' || aiResponse.severity === 'CRITICAL') &&
+            (aiResponse.confidence_type === 'DETERMINISTIC');
+
+        if (shouldExecutePlaybook) {
+            console.log(`[⚡] DETERMINISTIC Threat Detected: Auto-executing Playbook...`);
             playbookResult = await executePlaybook(updatedAlert.id, aiResponse, isJson ? req.body : { source_ip: aiResponse.extracted_ip });
             sendTelegramAlert(aiResponse, osintData);
         } else {
-            console.log(`[!] Playbook & Alert Skipped: ${aiResponse.is_false_positive ? "False Positive" : "Low Severity"}`);
+            if (aiResponse.confidence_type === 'PROBABILISTIC') {
+                console.log(`[✋] PROBABILISTIC Threat Detected: Execution Halted. Sent to War Room for Human Approval.`);
+            } else {
+                console.log(`[!] Playbook Skipped: ${aiResponse.is_false_positive ? "False Positive" : "Low Severity"}`);
+            }
         }
 
         return res.status(200).json({
@@ -179,11 +202,12 @@ const handleSecurityAlert = async(req, res) => {
             cached: false,
             is_false_positive: aiResponse.is_false_positive,
             confidence: aiResponse.confidence_score,
+            alert_status: alertStatus, // ضفنا دي عشان نشوفها في البوستمان
             analysis: aiResponse,
             osint: osintData,
             cti: ctiData,
             playbook_executed: !!playbookResult,
-            playbook_details: playbookResult
+            playbook_details: playbookResult || "Skipped (Sent to War Room / Low Severity / False Positive)"
         });
 
     } catch (error) {
@@ -492,12 +516,100 @@ app.post('/api/v1/redswarm/auto-pilot', async(req, res) => {
     })();
 });
 
+// ==========================================
+// ⏱️ ESCALATION WATCHER (Timeout Auto-Kill)
+// ==========================================
+//const ESCALATION_TIMEOUT_MINUTES = 1; // الوقت المسموح للتيم قبل التدخل الآلي
+
+const startEscalationWatcher = () => {
+    // هيشتغل كل 60 ثانية (دقيقة) يشيك على الداتا بيز
+    setInterval(async() => {
+        try {
+            // جوه الـ setInterval:
+            const timeLimit = new Date(Date.now() - (liveConfig.SLA_TIMEOUT_MINUTES * 60 * 1000));
+
+            // هنجيب كل التنبيهات اللي مستنية موافقة وعدى عليها 10 دقايق
+            const expiredAlerts = await prisma.alert.findMany({
+                where: {
+                    status: 'WAITING_FOR_APPROVAL',
+                    createdAt: { lt: timeLimit }
+                }
+            });
+
+            for (const alert of expiredAlerts) {
+                console.log(`\n[⏰] SLA TIMEOUT: Alert ${alert.id} exceeded ${ESCALATION_TIMEOUT_MINUTES} mins!`);
+                console.log(`[🤖] Bayezid taking over. Auto-Escalating threat: ${alert.threatType}`);
+
+                // 1. نغير الحالة عشان مننفذوش تاني
+                await prisma.alert.update({
+                    where: { id: alert.id },
+                    data: { status: 'AUTO_ESCALATED' }
+                });
+
+                // 2. نبني كبسولة الداتا عشان نبعتها لملف الـ Playbook
+                const mockAiResponse = {
+                    severity: alert.severity,
+                    threat_type: alert.threatType,
+                    extracted_ip: alert.sourceIp,
+                    recommended_action: alert.recommendedAction || "Auto-Isolated due to timeout SLA."
+                };
+
+                // 3. نضرب الـ Playbook بالنار
+                await executePlaybook(alert.id, mockAiResponse, { source_ip: alert.sourceIp });
+
+                // (اختياري) ممكن تبعت رسالة تليجرام هنا تقول إن السيستم اتصرف لوحده
+                console.log(`[✔] Auto-Escalation Complete for IP: ${alert.sourceIp}`);
+            }
+        } catch (error) {
+            console.error('[-] Escalation Watcher Error:', error.message);
+        }
+    }, 60 * 1000); // 1 minute interval
+};
+
+// ==========================================
+// 🧠 LIVE SYSTEM TUNING (SOC MANAGER ONLY)
+// ==========================================
+app.post('/api/v1/system/tune', async(req, res) => {
+    const { command, role } = req.body;
+
+    const result = await processTuningCommand(command, role);
+
+    if (result.action === "UNAUTHORIZED") {
+        return res.status(403).json(result);
+    }
+
+    res.json({
+        status: "success",
+        current_config: liveConfig,
+        message: result.reply
+    });
+});
+
 const PORT = process.env.PORT || 3000;
+
+const loadConfigsFromDB = async() => {
+    try {
+        const configs = await prisma.systemConfig.findMany();
+        configs.forEach(cfg => {
+            if (cfg.key === 'SLA_TIMEOUT_MINUTES') {
+                liveConfig.SLA_TIMEOUT_MINUTES = Number(cfg.value);
+            }
+            // لو زودت فيتشرز تانية مستقبلاً ضيفها هنا
+        });
+        console.log(`[📥] Persistent configurations loaded from Database.`);
+    } catch (err) {
+        console.log(`[⚠️] Startup: Using default configurations.`);
+    }
+};
+
 // ==========================================
 // BAYEZID STARTUP SEQUENCE & MODE SELECTION
 // ==========================================
 const startBayezidServer = () => {
     const server = app.listen(PORT, async() => {
+
+        await loadConfigsFromDB();
+
         console.log(`\n=================================`);
         console.log(`[+] Bayezid Cognitive Engine V3 LIVE`);
 
@@ -516,7 +628,11 @@ const startBayezidServer = () => {
         if (typeof loadMitreDatabase === 'function' && global.BAYEZID_MODE === 'BLUE') {
             await loadMitreDatabase();
         }
+        startEscalationWatcher();
+        // ✅ السطر الجديد:
+        console.log(`[⏱️] SLA Escalation Watcher Active (${liveConfig.SLA_TIMEOUT_MINUTES} min timeout)`);
     });
+
 
     server.on('error', (error) => {
         if (error.code === 'EADDRINUSE') {
