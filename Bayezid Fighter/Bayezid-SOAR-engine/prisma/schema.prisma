@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Alert {
@@ -39,4 +40,15 @@ model Playbook {
   description String
   actions     Json
   createdAt   DateTime @default(now())
+}
+
+model RedSwarmLog {
+  id              Int      @id @default(autoincrement())
+  targetIp        String
+  agentName       String   // Scout, Breacher, Phantom, Chameleon
+  assignedTask    String   @db.Text
+  executedCommand String?  @db.Text
+  executionOutput String?  @db.Text 
+  isSuccess       Boolean? 
+  createdAt       DateTime @default(now())
 }

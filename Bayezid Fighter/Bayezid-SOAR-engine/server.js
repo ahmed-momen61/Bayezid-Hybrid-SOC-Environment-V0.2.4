@@ -246,7 +246,6 @@ const handleSimulationRun = async(req, res) => {
 };
 
 app.post('/api/v1/simulation/run', handleSimulationRun);
-
 // ==========================================
 // REDSWARM OFFENSIVE API ROUTE
 // ==========================================
@@ -428,6 +427,52 @@ app.post('/api/v1/redswarm/scribe', async(req, res) => {
         console.error('[-] Overlord API Crash:', error); // ضفنا دي
         res.status(500).json({ status: 'error', message: error.message });
     }
+});
+
+// ==========================================
+// REDSWARM: THE AUTONOMOUS HEART 🦅
+// ==========================================
+app.post('/api/v1/redswarm/auto-pilot', async(req, res) => {
+    const { targetInfo } = req.body;
+    if (!targetInfo) return res.status(400).json({ error: 'Target IP is required' });
+
+    console.log(`\n[🚀] INITIATING FULL AUTO-PILOT CAMPAIGN AGAINST: ${targetInfo}`);
+    res.status(200).json({ status: 'success', message: 'Campaign started. Overlord is now in control.' });
+
+    // الحلقة المستقلة
+    (async() => {
+        let campaignActive = true;
+        let lastScanResults = "";
+
+        while (campaignActive) {
+            // 1. المايسترو يحلل الداتا بيز ويقرر الخطوة الجاية
+            const decision = await runOverlordAgent(targetInfo);
+
+            if (!decision || decision.is_operation_complete) {
+                console.log(`[👑] Overlord: Operation Finished. Scribe is writing the report.`);
+                await runScribeAgent(targetInfo);
+                campaignActive = false;
+                break;
+            }
+
+            console.log(`[👑] Overlord Order: Activate [${decision.next_agent}]`);
+
+            // 2. تنفيذ الأوامر وتحديث الداتا بيز
+            if (decision.next_agent === 'Scout') {
+                const scoutData = await runScoutAgent(targetInfo, decision.detailed_instructions);
+                lastScanResults = scoutData.scan_results;
+            } else if (decision.next_agent === 'Breacher') {
+                await runBreacherAgent(targetInfo, lastScanResults, decision.detailed_instructions);
+            } else if (decision.next_agent === 'Phantom') {
+                await runPhantomAgent(targetInfo, "Previous session logs in DB", decision.detailed_instructions);
+            } else if (decision.next_agent === 'Chameleon') {
+                await runChameleonAgent(targetInfo, "Failed payloads in DB", "WAF Bypass needed", decision.detailed_instructions);
+            }
+
+            // انتظار بسيط عشان ميعملش Spam للـ API
+            await new Promise(r => setTimeout(r, 5000));
+        }
+    })();
 });
 
 const PORT = process.env.PORT || 3000;

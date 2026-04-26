@@ -3,6 +3,9 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { enrichContext } = require('./ragService');
 require('dotenv').config();
 
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
+
 const util = require('util');
 const { exec } = require('child_process');
 const execPromise = util.promisify(exec);
@@ -220,18 +223,52 @@ const orchestrateRedSwarm = async(targetInfo, currentState) => {
 };
 
 // ==========================================
+// Project RedSwarm: Universal AI Wrapper (Cloud with Local Fallback)
+// ==========================================
+const askRedSwarmAI = async(prompt, requireJson = true) => {
+    try {
+        // 1. المحاولة الأولى: Google Gemini (Cloud)
+        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+        const model = genAI.getGenerativeModel({
+            model: "gemini-2.5-flash",
+            generationConfig: requireJson ? { responseMimeType: "application/json" } : {}
+        });
+
+        const response = await model.generateContent(prompt);
+        const text = response.response.text();
+        return requireJson ? JSON.parse(text) : text;
+
+    } catch (cloudError) {
+        console.warn(`\n[⚠️] Gemini Cloud Failed: ${cloudError.message}`);
+        console.log(`[🔄] Initiating Fallback to Local AI (Ollama/Qwen)...`);
+
+        try {
+            // 2. المحاولة البديلة: Local AI (Ollama)
+            // نتأكد إننا بنبعت لـ Ollama وبنطلب منه يرجع JSON لو مطلوب
+            const localResponse = await axios.post('http://localhost:11434/api/generate', {
+                model: process.env.LOCAL_MODEL_NAME || "qwen", // يقدر يسحب اسم الموديل من .env أو يستخدم qwen كافتراضي
+                prompt: prompt + (requireJson ? "\n\nCRITICAL: You MUST return ONLY valid JSON formatting." : ""),
+                stream: false,
+                format: requireJson ? "json" : "" // خاصية في Ollama بتجبره يطلع JSON
+            });
+
+            const text = localResponse.data.response;
+            return requireJson ? JSON.parse(text) : text;
+
+        } catch (localError) {
+            console.error(`[❌] Local AI also failed. System is blind: ${localError.message}`);
+            throw new Error("Both Cloud and Local AI Engines failed.");
+        }
+    }
+};
+
+// ==========================================
 // Project RedSwarm: Scout Agent (Recon)
 // ==========================================
 const runScoutAgent = async(targetInfo, customInstructions = "") => {
     console.log(`\n[👁️] Waking up Scout (Recon Agent) for Target: ${targetInfo}...`);
 
     try {
-        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-        const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash",
-            generationConfig: { responseMimeType: "application/json" }
-        });
-
         const scoutPrompt = `You are 'Scout', the elite Reconnaissance Agent of Project RedSwarm.
         Target: ${targetInfo}
         User Custom Instructions (if any): ${customInstructions || "None"}
@@ -250,8 +287,8 @@ const runScoutAgent = async(targetInfo, customInstructions = "") => {
             ]
         }`;
 
-        const aiResponse = await model.generateContent(scoutPrompt);
-        const aiDecision = JSON.parse(aiResponse.response.text());
+        // استخدام الدالة المركزية (الوسيط)
+        const aiDecision = await askRedSwarmAI(scoutPrompt, true);
 
         console.log(`[🤖] Scout decided the best command is: ${aiDecision.best_command}`);
         console.log(`[⚙️] Executing command physically on host... Please wait (this may take a minute).`);
@@ -265,6 +302,18 @@ const runScoutAgent = async(targetInfo, customInstructions = "") => {
             console.log(`[❌] Execution failed. Is Nmap installed on this Windows machine?`);
             scanOutput = `Execution Error: ${execError.message}\nMake sure Nmap is installed and added to system PATH.`;
         }
+
+        // --- توثيق الحركة في قاعدة البيانات ---
+        await prisma.redSwarmLog.create({
+            data: {
+                targetIp: targetInfo,
+                agentName: "Scout",
+                assignedTask: customInstructions || "Execute initial reconnaissance",
+                executedCommand: aiDecision.best_command,
+                executionOutput: scanOutput,
+                isSuccess: !scanOutput.includes("Execution Error")
+            }
+        });
 
         return {
             agent: "Scout",
@@ -288,12 +337,6 @@ const runBreacherAgent = async(targetInfo, scanResults, customInstructions = "")
     console.log(`\n[⚔️] Waking up Breacher (Initial Access Agent) for Target: ${targetInfo}...`);
 
     try {
-        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-        const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash",
-            generationConfig: { responseMimeType: "application/json" }
-        });
-
         const breacherPrompt = `You are 'Breacher', the Initial Access and Exploitation Agent of Project RedSwarm.
         Target: ${targetInfo}
         Nmap Scan Results / Recon Data:
@@ -316,11 +359,23 @@ const runBreacherAgent = async(targetInfo, scanResults, customInstructions = "")
             ]
         }`;
 
-        const aiResponse = await model.generateContent(breacherPrompt);
-        const aiDecision = JSON.parse(aiResponse.response.text());
+        // استخدام الدالة المركزية
+        const aiDecision = await askRedSwarmAI(breacherPrompt, true);
 
         console.log(`[🎯] Breacher identified primary vector: ${aiDecision.primary_attack_vector}`);
         console.log(`[🔥] Recommended Command: ${aiDecision.best_command}`);
+
+        // --- توثيق الحركة في قاعدة البيانات ---
+        await prisma.redSwarmLog.create({
+            data: {
+                targetIp: targetInfo,
+                agentName: "Breacher",
+                assignedTask: customInstructions || "Analyze recon data and formulate breach plan",
+                executedCommand: aiDecision.best_command,
+                executionOutput: `Vector: ${aiDecision.primary_attack_vector} | Reasoning: ${aiDecision.reasoning}`,
+                isSuccess: true
+            }
+        });
 
         return {
             agent: "Breacher",
@@ -342,12 +397,6 @@ const runPhantomAgent = async(targetInfo, shellContext, customInstructions = "")
     console.log(`\n[👻] Waking up Phantom (Escalation Agent) for Target: ${targetInfo}...`);
 
     try {
-        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-        const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash",
-            generationConfig: { responseMimeType: "application/json" }
-        });
-
         const phantomPrompt = `You are 'Phantom', the Privilege Escalation and Persistence Agent of Project RedSwarm.
         Target: ${targetInfo}
         Current Shell Context / Access Level:
@@ -370,11 +419,23 @@ const runPhantomAgent = async(targetInfo, shellContext, customInstructions = "")
             ]
         }`;
 
-        const aiResponse = await model.generateContent(phantomPrompt);
-        const aiDecision = JSON.parse(aiResponse.response.text());
+        // استخدام الدالة المركزية
+        const aiDecision = await askRedSwarmAI(phantomPrompt, true);
 
         console.log(`[👻] Phantom suggests technique: ${aiDecision.primary_escalation_vector}`);
         console.log(`[🔑] Payload: ${aiDecision.best_command}`);
+
+        // --- توثيق الحركة في قاعدة البيانات ---
+        await prisma.redSwarmLog.create({
+            data: {
+                targetIp: targetInfo,
+                agentName: "Phantom",
+                assignedTask: customInstructions || "Formulate privilege escalation plan",
+                executedCommand: aiDecision.best_command,
+                executionOutput: `Vector: ${aiDecision.primary_escalation_vector} | Reasoning: ${aiDecision.reasoning}`,
+                isSuccess: true
+            }
+        });
 
         return {
             agent: "Phantom",
@@ -396,12 +457,6 @@ const runChameleonAgent = async(targetInfo, failedPayload, wafContext, customIns
     console.log(`\n[🦎] Waking up Chameleon (Tuning Agent) to bypass filters on Target: ${targetInfo}...`);
 
     try {
-        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-        const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash",
-            generationConfig: { responseMimeType: "application/json" }
-        });
-
         const chameleonPrompt = `You are 'Chameleon', the Defense Evasion and Payload Tuning Agent of Project RedSwarm.
         Target: ${targetInfo}
         Failed Payload / Blocked Command: ${failedPayload}
@@ -423,11 +478,23 @@ const runChameleonAgent = async(targetInfo, failedPayload, wafContext, customIns
             ]
         }`;
 
-        const aiResponse = await model.generateContent(chameleonPrompt);
-        const aiDecision = JSON.parse(aiResponse.response.text());
+        // استخدام الدالة المركزية
+        const aiDecision = await askRedSwarmAI(chameleonPrompt, true);
 
         console.log(`[🦎] Chameleon applied technique: ${aiDecision.obfuscation_technique}`);
         console.log(`[✨] Tuned Payload: ${aiDecision.tuned_payload}`);
+
+        // --- توثيق الحركة في قاعدة البيانات ---
+        await prisma.redSwarmLog.create({
+            data: {
+                targetIp: targetInfo,
+                agentName: "Chameleon",
+                assignedTask: customInstructions || `Bypass WAF for failed payload`,
+                executedCommand: aiDecision.tuned_payload,
+                executionOutput: `Technique: ${aiDecision.obfuscation_technique} | Reasoning: ${aiDecision.reasoning}`,
+                isSuccess: true
+            }
+        });
 
         return {
             agent: "Chameleon",
@@ -443,35 +510,47 @@ const runChameleonAgent = async(targetInfo, failedPayload, wafContext, customIns
 };
 
 // ==========================================
-// Project RedSwarm: Overlord Agent (The Supervisor)
+// Project RedSwarm: Autonomous Overlord (The Mastermind)
 // ==========================================
-const runOverlordAgent = async(targetInfo, allAgentsData) => {
-    console.log(`\n[👑] Waking up The Overlord (Supreme Supervisor) to analyze all data for: ${targetInfo}...`);
+const runOverlordAgent = async(targetInfo) => {
+    console.log(`\n[👑] The Overlord is reviewing the database logs for Target: ${targetInfo}...`);
 
     try {
-        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", generationConfig: { responseMimeType: "application/json" } });
+        // 1. جلب كل التاريخ من الداتا بيز
+        const logs = await prisma.redSwarmLog.findMany({
+            where: { targetIp: targetInfo },
+            orderBy: { createdAt: 'asc' }
+        });
 
-        const overlordPrompt = `You are 'The Overlord', the supreme strategic commander of Project RedSwarm.
+        const formattedLogs = logs.map(l =>
+            `[${l.agentName}] Task: ${l.assignedTask} | Command: ${l.executedCommand} | Success: ${l.isSuccess} | Output: ${l.executionOutput}`
+        ).join('\n\n');
+
+        // الـ Prompt الشرس للوصول لأعمق نقطة
+        const overlordPrompt = `You are 'The Overlord', the supreme Autonomous APT Commander of Project RedSwarm.
         Target: ${targetInfo}
-        Combined Intelligence from all previous agents (Scout, Breacher, Phantom, etc.):
-        ${allAgentsData}
+        
+        Operation History (from Database):
+        ${formattedLogs || "No actions taken yet. This is the beginning of the campaign."}
 
-        Your task:
-        1. Analyze all the findings together. Cross-reference the open ports, vulnerabilities, and failed/successful payloads.
-        2. Identify the ultimate critical path (What is the highest impact vulnerability?).
-        3. Issue a direct, high-level strategic order for the next phase.
+        YOUR DIRECTIVE:
+        1. Achieve MAXIMUM EXPLOITATION. You must reach the deepest point possible in the target environment.
+        2. Use ALL possible techniques, even if there is only a 1% chance of success. Do not stop at the first successful exploit; chain them, establish deep persistence, and prepare for lateral movement.
+        3. Analyze the history above. Identify what has failed and what has succeeded. 
+        4. If the target is fully compromised and all extreme avenues are exhausted, set "is_operation_complete" to true and call the 'Scribe' agent.
+        5. If not, decide the exact next agent to wake up and the precise instructions they must execute.
 
         Strictly return JSON:
         {
-            "global_analysis": "Your supreme analysis of the entire situation",
-            "critical_vulnerability": "The most dangerous flaw found across all reports",
-            "strategic_order": "What the team MUST focus on next",
-            "ready_for_report": true/false (Set to true if we have enough data to generate the final pentest report)
+            "global_analysis": "Your deep analysis of the current situation",
+            "is_operation_complete": boolean,
+            "next_agent": "Scout|Breacher|Phantom|Chameleon|Scribe",
+            "detailed_instructions": "Exact, aggressive instructions for the next agent based on the database logs"
         }`;
 
-        const aiResponse = await model.generateContent(overlordPrompt);
-        return JSON.parse(aiResponse.response.text());
+        // استخدام الدالة المركزية مباشرة لأنها بترجع الـ JSON Parsed
+        return await askRedSwarmAI(overlordPrompt, true);
+
     } catch (error) {
         console.error('[-] Overlord Agent error:', error.message);
         return null;
@@ -479,31 +558,38 @@ const runOverlordAgent = async(targetInfo, allAgentsData) => {
 };
 
 // ==========================================
-// Project RedSwarm: Scribe Agent (The Reporter)
+// Project RedSwarm: Scribe Agent (The Ultimate Reporter)
 // ==========================================
-const runScribeAgent = async(targetInfo, campaignHistory) => {
-    console.log(`\n[📝] Waking up Scribe (Reporting Agent) to write final report for: ${targetInfo}...`);
+const runScribeAgent = async(targetInfo) => {
+    console.log(`\n[📝] Scribe is pulling all data from the Database to generate the final report...`);
 
     try {
-        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-        // هنا مش هنطلب JSON، هنخليه يكتب Markdown عشان التقرير يكون مقروء للعميل
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const logs = await prisma.redSwarmLog.findMany({
+            where: { targetIp: targetInfo },
+            orderBy: { createdAt: 'asc' }
+        });
 
-        const scribePrompt = `You are 'Scribe', the elite reporting agent for Project RedSwarm.
-        Write a highly professional Red Team / Penetration Testing Executive Summary and Technical Report.
-        Target Device/IP: ${targetInfo}
-        Campaign History & Data: ${campaignHistory}
+        const campaignHistory = logs.map(l =>
+            `Phase: ${l.agentName} | Action: ${l.assignedTask} | Result: ${l.isSuccess ? 'SUCCESS' : 'FAILED'} | Details: ${l.executionOutput}`
+        ).join('\n');
 
-        The report MUST include:
-        1. Executive Summary (High-level business impact).
-        2. Discovered Vulnerabilities (Severity, CVEs if applicable).
-        3. Attack Narrative (How we got in step-by-step).
-        4. Remediation / Mitigation steps (How to fix the device).
+        const scribePrompt = `You are 'Scribe', the elite reporting agent.
+        Write a highly professional Red Team Penetration Testing Report for Target: ${targetInfo}.
+        
+        Full Database Logs (Successes & Failures): 
+        ${campaignHistory}
+
+        Your report MUST include:
+        1. Executive Summary.
+        2. Detailed Attack Chain (documenting every attempt, what failed, and what ultimately succeeded).
+        3. Vulnerabilities Discovered (with CWE/Severity).
+        4. Remediation Steps.
         
         Format strictly in Professional Markdown.`;
 
-        const aiResponse = await model.generateContent(scribePrompt);
-        return aiResponse.response.text(); // ده هيرجع نص جاهز يتبعت PDF أو يتعرض
+        // نبعت false عشان هنا مش طالبين JSON، عايزينه يرجع Markdown Report عادي
+        return await askRedSwarmAI(scribePrompt, false);
+
     } catch (error) {
         console.error('[-] Scribe Agent error:', error.message);
         return null;
