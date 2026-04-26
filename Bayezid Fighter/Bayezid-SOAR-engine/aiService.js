@@ -227,7 +227,7 @@ const orchestrateRedSwarm = async(targetInfo, currentState) => {
 // ==========================================
 const askRedSwarmAI = async(prompt, requireJson = true) => {
     try {
-        // 1. المحاولة الأولى: Google Gemini (Cloud)
+        // 1. First Attempt: Google Gemini (Cloud)
         const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
         const model = genAI.getGenerativeModel({
             model: "gemini-2.5-flash",
@@ -243,13 +243,13 @@ const askRedSwarmAI = async(prompt, requireJson = true) => {
         console.log(`[🔄] Initiating Fallback to Local AI (Ollama/Qwen)...`);
 
         try {
-            // 2. المحاولة البديلة: Local AI (Ollama)
-            // نتأكد إننا بنبعت لـ Ollama وبنطلب منه يرجع JSON لو مطلوب
+            // 2. Fallback Attempt: Local AI (Ollama)
+            // Ensure we send to Ollama and request JSON if required
             const localResponse = await axios.post('http://localhost:11434/api/generate', {
-                model: process.env.LOCAL_MODEL_NAME || "qwen", // يقدر يسحب اسم الموديل من .env أو يستخدم qwen كافتراضي
+                model: process.env.LOCAL_MODEL_NAME || "qwen", // Can pull model name from .env or use qwen as default
                 prompt: prompt + (requireJson ? "\n\nCRITICAL: You MUST return ONLY valid JSON formatting." : ""),
                 stream: false,
-                format: requireJson ? "json" : "" // خاصية في Ollama بتجبره يطلع JSON
+                format: requireJson ? "json" : "" // Ollama feature that forces JSON output
             });
 
             const text = localResponse.data.response;
@@ -287,7 +287,7 @@ const runScoutAgent = async(targetInfo, customInstructions = "") => {
             ]
         }`;
 
-        // استخدام الدالة المركزية (الوسيط)
+        // Use the central function (middleware)
         const aiDecision = await askRedSwarmAI(scoutPrompt, true);
 
         console.log(`[🤖] Scout decided the best command is: ${aiDecision.best_command}`);
@@ -303,7 +303,7 @@ const runScoutAgent = async(targetInfo, customInstructions = "") => {
             scanOutput = `Execution Error: ${execError.message}\nMake sure Nmap is installed and added to system PATH.`;
         }
 
-        // --- توثيق الحركة في قاعدة البيانات ---
+        // --- Log activity to database ---
         await prisma.redSwarmLog.create({
             data: {
                 targetIp: targetInfo,
@@ -359,13 +359,13 @@ const runBreacherAgent = async(targetInfo, scanResults, customInstructions = "")
             ]
         }`;
 
-        // استخدام الدالة المركزية
+        // Use the central function
         const aiDecision = await askRedSwarmAI(breacherPrompt, true);
 
         console.log(`[🎯] Breacher identified primary vector: ${aiDecision.primary_attack_vector}`);
         console.log(`[🔥] Recommended Command: ${aiDecision.best_command}`);
 
-        // --- توثيق الحركة في قاعدة البيانات ---
+        // --- Log activity to database ---
         await prisma.redSwarmLog.create({
             data: {
                 targetIp: targetInfo,
@@ -419,13 +419,13 @@ const runPhantomAgent = async(targetInfo, shellContext, customInstructions = "")
             ]
         }`;
 
-        // استخدام الدالة المركزية
+        // Use the central function
         const aiDecision = await askRedSwarmAI(phantomPrompt, true);
 
         console.log(`[👻] Phantom suggests technique: ${aiDecision.primary_escalation_vector}`);
         console.log(`[🔑] Payload: ${aiDecision.best_command}`);
 
-        // --- توثيق الحركة في قاعدة البيانات ---
+        // --- Log activity to database ---
         await prisma.redSwarmLog.create({
             data: {
                 targetIp: targetInfo,
@@ -478,13 +478,13 @@ const runChameleonAgent = async(targetInfo, failedPayload, wafContext, customIns
             ]
         }`;
 
-        // استخدام الدالة المركزية
+        // Use the central function
         const aiDecision = await askRedSwarmAI(chameleonPrompt, true);
 
         console.log(`[🦎] Chameleon applied technique: ${aiDecision.obfuscation_technique}`);
         console.log(`[✨] Tuned Payload: ${aiDecision.tuned_payload}`);
 
-        // --- توثيق الحركة في قاعدة البيانات ---
+        // --- Log activity to database ---
         await prisma.redSwarmLog.create({
             data: {
                 targetIp: targetInfo,
@@ -516,7 +516,7 @@ const runOverlordAgent = async(targetInfo) => {
     console.log(`\n[👑] The Overlord is reviewing the database logs for Target: ${targetInfo}...`);
 
     try {
-        // 1. جلب كل التاريخ من الداتا بيز
+        // 1. Fetch all history from database
         const logs = await prisma.redSwarmLog.findMany({
             where: { targetIp: targetInfo },
             orderBy: { createdAt: 'asc' }
@@ -526,7 +526,7 @@ const runOverlordAgent = async(targetInfo) => {
             `[${l.agentName}] Task: ${l.assignedTask} | Command: ${l.executedCommand} | Success: ${l.isSuccess} | Output: ${l.executionOutput}`
         ).join('\n\n');
 
-        // الـ Prompt الشرس للوصول لأعمق نقطة
+        // The aggressive prompt to reach the deepest point
         const overlordPrompt = `You are 'The Overlord', the supreme Autonomous APT Commander of Project RedSwarm.
         Target: ${targetInfo}
         
@@ -548,7 +548,7 @@ const runOverlordAgent = async(targetInfo) => {
             "detailed_instructions": "Exact, aggressive instructions for the next agent based on the database logs"
         }`;
 
-        // استخدام الدالة المركزية مباشرة لأنها بترجع الـ JSON Parsed
+        // Use the central function directly as it returns parsed JSON
         return await askRedSwarmAI(overlordPrompt, true);
 
     } catch (error) {
@@ -587,7 +587,7 @@ const runScribeAgent = async(targetInfo) => {
         
         Format strictly in Professional Markdown.`;
 
-        // نبعت false عشان هنا مش طالبين JSON، عايزينه يرجع Markdown Report عادي
+        // Send false because here we don't need JSON, we want a regular Markdown Report
         return await askRedSwarmAI(scribePrompt, false);
 
     } catch (error) {

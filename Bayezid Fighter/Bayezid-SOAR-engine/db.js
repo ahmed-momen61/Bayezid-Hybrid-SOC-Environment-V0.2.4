@@ -1,7 +1,6 @@
 const sqlite3 = require('sqlite3').verbose();
 const db = new sqlite3.Database('./bayezid_soar.db');
 
-// تكويد جدول الـ Blocklist لو مش موجود
 db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS blocklist (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -410,7 +410,7 @@ app.post('/api/v1/redswarm/overlord', async(req, res) => {
         const result = await runOverlordAgent(targetInfo, allAgentsData);
         res.status(200).json({ status: 'success', data: result });
     } catch (error) {
-        console.error('[-] Overlord API Crash:', error); // ضفنا دي
+        console.error('[-] Overlord API Crash:', error);
         res.status(500).json({ status: 'error', message: error.message });
     }
 });
@@ -424,7 +424,7 @@ app.post('/api/v1/redswarm/scribe', async(req, res) => {
         const report = await runScribeAgent(targetInfo, campaignHistory);
         res.status(200).json({ status: 'success', report_markdown: report });
     } catch (error) {
-        console.error('[-] Overlord API Crash:', error); // ضفنا دي
+        console.error('[-] Overlord API Crash:', error);
         res.status(500).json({ status: 'error', message: error.message });
     }
 });
@@ -439,17 +439,24 @@ app.post('/api/v1/redswarm/auto-pilot', async(req, res) => {
     console.log(`\n[🚀] INITIATING FULL AUTO-PILOT CAMPAIGN AGAINST: ${targetInfo}`);
     res.status(200).json({ status: 'success', message: 'Campaign started. Overlord is now in control.' });
 
-    // الحلقة المستقلة
+    //
     (async() => {
         let campaignActive = true;
         let lastScanResults = "";
 
-        while (campaignActive) {
-            // 1. المايسترو يحلل الداتا بيز ويقرر الخطوة الجاية
+        // --- 🛡️ Protection Limit: Max iterations ---
+        let iterations = 0;
+        const MAX_ITERATIONS = 12;
+
+        while (campaignActive && iterations < MAX_ITERATIONS) {
+            iterations++;
+            console.log(`\n--- ⏳ Autonomous Loop Iteration: ${iterations}/${MAX_ITERATIONS} ---`);
+
+            // 1. The Maestro analyzes the database and decides the next step
             const decision = await runOverlordAgent(targetInfo);
 
             if (!decision || decision.is_operation_complete) {
-                console.log(`[👑] Overlord: Operation Finished. Scribe is writing the report.`);
+                console.log(`[👑] Overlord: Operation Finished (or AI halted). Scribe is writing the report.`);
                 await runScribeAgent(targetInfo);
                 campaignActive = false;
                 break;
@@ -457,20 +464,30 @@ app.post('/api/v1/redswarm/auto-pilot', async(req, res) => {
 
             console.log(`[👑] Overlord Order: Activate [${decision.next_agent}]`);
 
-            // 2. تنفيذ الأوامر وتحديث الداتا بيز
+            // 2. Execute orders and update database
             if (decision.next_agent === 'Scout') {
                 const scoutData = await runScoutAgent(targetInfo, decision.detailed_instructions);
-                lastScanResults = scoutData.scan_results;
+                // --- 🛡️ Protection: Verify agent didn't fail before fetching data ---
+                if (scoutData) lastScanResults = scoutData.scan_results;
+
             } else if (decision.next_agent === 'Breacher') {
                 await runBreacherAgent(targetInfo, lastScanResults, decision.detailed_instructions);
+
             } else if (decision.next_agent === 'Phantom') {
                 await runPhantomAgent(targetInfo, "Previous session logs in DB", decision.detailed_instructions);
+
             } else if (decision.next_agent === 'Chameleon') {
                 await runChameleonAgent(targetInfo, "Failed payloads in DB", "WAF Bypass needed", decision.detailed_instructions);
             }
 
-            // انتظار بسيط عشان ميعملش Spam للـ API
+            // Brief wait to prevent API spam
             await new Promise(r => setTimeout(r, 5000));
+        }
+
+        // --- 🛡️ If loop reached max limit without completing, force report with current data ---
+        if (iterations >= MAX_ITERATIONS) {
+            console.log(`\n[⚠️] OVERLORD REACHED MAX ITERATIONS (${MAX_ITERATIONS}). Forcing operation halt and reporting.`);
+            await runScribeAgent(targetInfo);
         }
     })();
 });
