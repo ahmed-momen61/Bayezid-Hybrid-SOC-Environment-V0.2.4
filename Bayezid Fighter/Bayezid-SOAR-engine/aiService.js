@@ -3,6 +3,10 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { enrichContext } = require('./ragService');
 require('dotenv').config();
 
+const util = require('util');
+const { exec } = require('child_process');
+const execPromise = util.promisify(exec);
+
 const deepSanitize = (obj) => {
     if (typeof obj !== 'object' || obj === null) return;
     for (let key in obj) {
@@ -173,7 +177,347 @@ const analyzeWithLocalModel = async(alertData) => {
     }
 };
 
+// ==========================================
+// Project RedSwarm: The Brain (Orchestrator)
+// ==========================================
+const orchestrateRedSwarm = async(targetInfo, currentState) => {
+    console.log(`\n[🧠] Waking up The Brain (RedSwarm Orchestrator) for Target: ${targetInfo}...`);
+
+    try {
+        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+        const model = genAI.getGenerativeModel({
+            model: "gemini-2.5-flash",
+            generationConfig: { responseMimeType: "application/json" }
+        });
+
+        const brainPrompt = `You are 'The Brain', the lead orchestrator of Project RedSwarm, an AI-driven Red Teaming squad.
+        Your squad:
+        1. "Scout": Active/Passive Reconnaissance & Scanning.
+        2. "Breacher": Exploitation & Initial Access.
+        3. "Phantom": Privilege Escalation & Persistence.
+        4. "Chameleon": Payload tuning & WAF bypass.
+        5. "Scribe": MITRE reporting.
+
+        Instructions:
+        - Analyze the Target and Current State.
+        - Decide which agent acts next based on MITRE ATT&CK.
+        - Output strictly in JSON format: 
+        { "next_agent": "AgentName", "task": "Detailed instructions", "mitre_tactic": "Tactic ID" }`;
+
+        const result = await model.generateContent(`${brainPrompt}\n\nTarget: ${targetInfo}\nCurrent State: ${currentState}`);
+        const text = result.response.text();
+
+        const decision = JSON.parse(text);
+        console.log(`[🎯] The Brain assigned task to: [${decision.next_agent}]`);
+        console.log(`[📋] Task: ${decision.task}`);
+
+        return decision;
+
+    } catch (error) {
+        console.error('[-] The Brain encountered an error:', error.message);
+        return null;
+    }
+};
+
+// ==========================================
+// Project RedSwarm: Scout Agent (Recon)
+// ==========================================
+const runScoutAgent = async(targetInfo, customInstructions = "") => {
+    console.log(`\n[👁️] Waking up Scout (Recon Agent) for Target: ${targetInfo}...`);
+
+    try {
+        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+        const model = genAI.getGenerativeModel({
+            model: "gemini-2.5-flash",
+            generationConfig: { responseMimeType: "application/json" }
+        });
+
+        const scoutPrompt = `You are 'Scout', the elite Reconnaissance Agent of Project RedSwarm.
+        Target: ${targetInfo}
+        User Custom Instructions (if any): ${customInstructions || "None"}
+
+        Your task:
+        1. Formulate the absolute best and safest 'nmap' command based on the target and any user instructions.
+        2. Provide 2 alternative 'nmap' commands (e.g., full port scan, UDP scan, or stealth scan).
+        
+        Strictly return JSON:
+        {
+            "best_command": "nmap ...",
+            "reasoning": "Why this is the best command",
+            "alternatives": [
+                { "command": "...", "description": "..." },
+                { "command": "...", "description": "..." }
+            ]
+        }`;
+
+        const aiResponse = await model.generateContent(scoutPrompt);
+        const aiDecision = JSON.parse(aiResponse.response.text());
+
+        console.log(`[🤖] Scout decided the best command is: ${aiDecision.best_command}`);
+        console.log(`[⚙️] Executing command physically on host... Please wait (this may take a minute).`);
+
+        let scanOutput = "";
+        try {
+            const { stdout, stderr } = await execPromise(aiDecision.best_command);
+            scanOutput = stdout || stderr;
+            console.log(`[✅] Scan completed successfully.`);
+        } catch (execError) {
+            console.log(`[❌] Execution failed. Is Nmap installed on this Windows machine?`);
+            scanOutput = `Execution Error: ${execError.message}\nMake sure Nmap is installed and added to system PATH.`;
+        }
+
+        return {
+            agent: "Scout",
+            executed_command: aiDecision.best_command,
+            reasoning: aiDecision.reasoning,
+            scan_results: scanOutput,
+            alternative_options: aiDecision.alternatives,
+            next_action: "Review the scan_results. If satisfied, target is ready for Breacher. If not, re-run Scout with an alternative command or custom instructions."
+        };
+
+    } catch (error) {
+        console.error('[-] Scout Agent error:', error.message);
+        return null;
+    }
+};
+
+// ==========================================
+// Project RedSwarm: Breacher Agent (Exploitation)
+// ==========================================
+const runBreacherAgent = async(targetInfo, scanResults, customInstructions = "") => {
+    console.log(`\n[⚔️] Waking up Breacher (Initial Access Agent) for Target: ${targetInfo}...`);
+
+    try {
+        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+        const model = genAI.getGenerativeModel({
+            model: "gemini-2.5-flash",
+            generationConfig: { responseMimeType: "application/json" }
+        });
+
+        const breacherPrompt = `You are 'Breacher', the Initial Access and Exploitation Agent of Project RedSwarm.
+        Target: ${targetInfo}
+        Nmap Scan Results / Recon Data:
+        ${scanResults}
+        
+        User Custom Instructions (if any): ${customInstructions || "None"}
+
+        Your task:
+        1. Analyze the scan results to find the weakest link (e.g., open SSH, HTTP login, vulnerable FTP).
+        2. Provide the absolute best attack command to get initial access (e.g., a specific hydra command, curl exploit, or Metasploit module path).
+        3. Provide 2 alternative attack vectors.
+
+        Strictly return JSON:
+        {
+            "primary_attack_vector": "Name of the vulnerability or method",
+            "best_command": "exact command to run in terminal",
+            "reasoning": "Why this is the best entry point",
+            "alternatives": [
+                { "method": "...", "command": "...", "description": "..." }
+            ]
+        }`;
+
+        const aiResponse = await model.generateContent(breacherPrompt);
+        const aiDecision = JSON.parse(aiResponse.response.text());
+
+        console.log(`[🎯] Breacher identified primary vector: ${aiDecision.primary_attack_vector}`);
+        console.log(`[🔥] Recommended Command: ${aiDecision.best_command}`);
+
+        return {
+            agent: "Breacher",
+            target: targetInfo,
+            attack_plan: aiDecision,
+            next_action: "Execute the 'best_command' on your attacker machine (Kali). If successful, hand over the resulting shell to Phantom (Escalation Agent)."
+        };
+
+    } catch (error) {
+        console.error('[-] Breacher Agent error:', error.message);
+        return null;
+    }
+};
+
+// ==========================================
+// Project RedSwarm: Phantom Agent (Escalation & Persistence)
+// ==========================================
+const runPhantomAgent = async(targetInfo, shellContext, customInstructions = "") => {
+    console.log(`\n[👻] Waking up Phantom (Escalation Agent) for Target: ${targetInfo}...`);
+
+    try {
+        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+        const model = genAI.getGenerativeModel({
+            model: "gemini-2.5-flash",
+            generationConfig: { responseMimeType: "application/json" }
+        });
+
+        const phantomPrompt = `You are 'Phantom', the Privilege Escalation and Persistence Agent of Project RedSwarm.
+        Target: ${targetInfo}
+        Current Shell Context / Access Level:
+        ${shellContext}
+        
+        User Custom Instructions (if any): ${customInstructions || "None"}
+
+        Your task:
+        1. Analyze the current shell access (e.g., low privilege user, restricted shell, web shell).
+        2. Provide the absolute best command(s) to escalate privileges to root, bypass restrictions, or establish persistence (e.g., Python PTY spawn, Reverse Shell payload, LinPEAS one-liner, modifying /etc/passwd).
+        3. Provide 2 alternative escalation/persistence methods.
+
+        Strictly return JSON:
+        {
+            "primary_escalation_vector": "Name of the technique",
+            "best_command": "exact command to run in the compromised shell",
+            "reasoning": "Why this works for the given context",
+            "alternatives": [
+                { "method": "...", "command": "...", "description": "..." }
+            ]
+        }`;
+
+        const aiResponse = await model.generateContent(phantomPrompt);
+        const aiDecision = JSON.parse(aiResponse.response.text());
+
+        console.log(`[👻] Phantom suggests technique: ${aiDecision.primary_escalation_vector}`);
+        console.log(`[🔑] Payload: ${aiDecision.best_command}`);
+
+        return {
+            agent: "Phantom",
+            target: targetInfo,
+            escalation_plan: aiDecision,
+            next_action: "Execute the payload in your target shell. If blocked by WAF/Filters, call Chameleon (Tuning Agent)."
+        };
+
+    } catch (error) {
+        console.error('[-] Phantom Agent error:', error.message);
+        return null;
+    }
+};
+
+// ==========================================
+// Project RedSwarm: Chameleon Agent (Evasion & Tuning)
+// ==========================================
+const runChameleonAgent = async(targetInfo, failedPayload, wafContext, customInstructions = "") => {
+    console.log(`\n[🦎] Waking up Chameleon (Tuning Agent) to bypass filters on Target: ${targetInfo}...`);
+
+    try {
+        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+        const model = genAI.getGenerativeModel({
+            model: "gemini-2.5-flash",
+            generationConfig: { responseMimeType: "application/json" }
+        });
+
+        const chameleonPrompt = `You are 'Chameleon', the Defense Evasion and Payload Tuning Agent of Project RedSwarm.
+        Target: ${targetInfo}
+        Failed Payload / Blocked Command: ${failedPayload}
+        WAF/Filter Context (Why it failed): ${wafContext}
+        User Custom Instructions (if any): ${customInstructions || "None"}
+
+        Your task:
+        1. Analyze why the payload was blocked based on the WAF context.
+        2. Rewrite, obfuscate, or encode the payload so it bypasses the filter while maintaining its original goal. Use techniques like Base64 encoding, hexadecimal, string splitting, or alternative binaries (e.g., using 'awk' or 'php' instead of 'python').
+        3. Provide 2 alternative tuned payloads.
+
+        Strictly return JSON:
+        {
+            "obfuscation_technique": "Name of the evasion technique used",
+            "tuned_payload": "The exact modified command to execute",
+            "reasoning": "Why this specific payload will bypass the described filter",
+            "alternatives": [
+                { "technique": "...", "tuned_payload": "...", "description": "..." }
+            ]
+        }`;
+
+        const aiResponse = await model.generateContent(chameleonPrompt);
+        const aiDecision = JSON.parse(aiResponse.response.text());
+
+        console.log(`[🦎] Chameleon applied technique: ${aiDecision.obfuscation_technique}`);
+        console.log(`[✨] Tuned Payload: ${aiDecision.tuned_payload}`);
+
+        return {
+            agent: "Chameleon",
+            target: targetInfo,
+            evasion_plan: aiDecision,
+            next_action: "Execute the 'tuned_payload'. If it succeeds, the filter is bypassed. If not, feed the new error back to Chameleon."
+        };
+
+    } catch (error) {
+        console.error('[-] Chameleon Agent error:', error.message);
+        return null;
+    }
+};
+
+// ==========================================
+// Project RedSwarm: Overlord Agent (The Supervisor)
+// ==========================================
+const runOverlordAgent = async(targetInfo, allAgentsData) => {
+    console.log(`\n[👑] Waking up The Overlord (Supreme Supervisor) to analyze all data for: ${targetInfo}...`);
+
+    try {
+        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", generationConfig: { responseMimeType: "application/json" } });
+
+        const overlordPrompt = `You are 'The Overlord', the supreme strategic commander of Project RedSwarm.
+        Target: ${targetInfo}
+        Combined Intelligence from all previous agents (Scout, Breacher, Phantom, etc.):
+        ${allAgentsData}
+
+        Your task:
+        1. Analyze all the findings together. Cross-reference the open ports, vulnerabilities, and failed/successful payloads.
+        2. Identify the ultimate critical path (What is the highest impact vulnerability?).
+        3. Issue a direct, high-level strategic order for the next phase.
+
+        Strictly return JSON:
+        {
+            "global_analysis": "Your supreme analysis of the entire situation",
+            "critical_vulnerability": "The most dangerous flaw found across all reports",
+            "strategic_order": "What the team MUST focus on next",
+            "ready_for_report": true/false (Set to true if we have enough data to generate the final pentest report)
+        }`;
+
+        const aiResponse = await model.generateContent(overlordPrompt);
+        return JSON.parse(aiResponse.response.text());
+    } catch (error) {
+        console.error('[-] Overlord Agent error:', error.message);
+        return null;
+    }
+};
+
+// ==========================================
+// Project RedSwarm: Scribe Agent (The Reporter)
+// ==========================================
+const runScribeAgent = async(targetInfo, campaignHistory) => {
+    console.log(`\n[📝] Waking up Scribe (Reporting Agent) to write final report for: ${targetInfo}...`);
+
+    try {
+        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+        // هنا مش هنطلب JSON، هنخليه يكتب Markdown عشان التقرير يكون مقروء للعميل
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+        const scribePrompt = `You are 'Scribe', the elite reporting agent for Project RedSwarm.
+        Write a highly professional Red Team / Penetration Testing Executive Summary and Technical Report.
+        Target Device/IP: ${targetInfo}
+        Campaign History & Data: ${campaignHistory}
+
+        The report MUST include:
+        1. Executive Summary (High-level business impact).
+        2. Discovered Vulnerabilities (Severity, CVEs if applicable).
+        3. Attack Narrative (How we got in step-by-step).
+        4. Remediation / Mitigation steps (How to fix the device).
+        
+        Format strictly in Professional Markdown.`;
+
+        const aiResponse = await model.generateContent(scribePrompt);
+        return aiResponse.response.text(); // ده هيرجع نص جاهز يتبعت PDF أو يتعرض
+    } catch (error) {
+        console.error('[-] Scribe Agent error:', error.message);
+        return null;
+    }
+};
+
 module.exports = {
     analyzeWithVertexAI,
-    analyzeWithLocalModel
+    analyzeWithLocalModel,
+    orchestrateRedSwarm,
+    runScoutAgent,
+    runBreacherAgent,
+    runPhantomAgent,
+    runChameleonAgent,
+    runOverlordAgent,
+    runScribeAgent
 };

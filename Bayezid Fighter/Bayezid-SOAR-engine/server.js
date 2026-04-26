@@ -1,9 +1,10 @@
 const express = require('express');
+const readline = require('readline');
 const dotenv = require('dotenv');
 const { PrismaClient } = require('@prisma/client');
 const path = require('path');
 
-const { analyzeWithVertexAI, analyzeWithLocalModel } = require('./aiService');
+const { analyzeWithVertexAI, analyzeWithLocalModel, orchestrateRedSwarm, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent } = require('./aiService');
 const { executePlaybook } = require('./playbookService');
 const { enrichWithOSINT } = require('./osintService');
 const { sendTelegramAlert } = require('./notificationService');
@@ -246,27 +247,242 @@ const handleSimulationRun = async(req, res) => {
 
 app.post('/api/v1/simulation/run', handleSimulationRun);
 
+// ==========================================
+// REDSWARM OFFENSIVE API ROUTE
+// ==========================================
+app.post('/api/v1/redswarm/engage', async(req, res) => {
+    const { targetInfo, currentState } = req.body;
 
-const PORT = process.env.PORT || 3000;
+    if (!targetInfo) {
+        return res.status(400).json({ error: 'Missing targetInfo in request body' });
+    }
 
-const server = app.listen(PORT, async() => {
-    console.log(`=================================`);
-    console.log(`[+] Bayezid Cognitive SOAR V2 LIVE`);
-    console.log(`[+] Dual-Engine Ready (Local/Cloud) 🔀`);
-    console.log(`[+] Global Threat Intel (CTI): ENABLED 🌍`);
-    console.log(`[+] High Availability (Auto-Failover) Active 🛡️`);
-    console.log(`[+] Mobile SOC (Telegram): CONNECTED 📱`);
-    console.log(`[+] Web Dashboard Running on http://localhost:${PORT} 🖥️`);
-    console.log(`=================================`);
+    console.log(`\n[🔥] RedSwarm Engagement Requested! Target: ${targetInfo}`);
 
-    if (typeof loadMitreDatabase === 'function') await loadMitreDatabase();
+    try {
+        const state = currentState || "Starting new engagement. Need initial reconnaissance.";
+        const decision = await orchestrateRedSwarm(targetInfo, state);
+
+        if (decision) {
+            res.status(200).json({
+                status: 'success',
+                message: 'The Brain has evaluated the target and assigned a task.',
+                data: decision
+            });
+        } else {
+            res.status(500).json({ status: 'error', message: 'The Brain failed to generate a strategy.' });
+        }
+    } catch (error) {
+        console.error('[-] RedSwarm API Error:', error);
+        res.status(500).json({ status: 'error', message: 'Internal Server Error during orchestration.' });
+    }
 });
 
-server.on('error', (error) => {
-    if (error.code === 'EADDRINUSE') {
-        console.error(`\n[!] ERROR: Port ${PORT} is currently in use! (A Zombie server is running).`);
-        console.error(`[!] Please close the old server or run: npx kill-port ${PORT}\n`);
-    } else {
-        console.error('\n[-] Server Crash:', error.message);
+// ==========================================
+// REDSWARM: SCOUT AGENT API
+// ==========================================
+app.post('/api/v1/redswarm/scout', async(req, res) => {
+    const { targetInfo, customInstructions } = req.body;
+
+    if (!targetInfo) {
+        return res.status(400).json({ error: 'Missing targetInfo in request body' });
     }
+
+    console.log(`\n[🔍] Deploying Scout to scan: ${targetInfo}`);
+    if (customInstructions) console.log(`[🗣️] User Instruction provided: ${customInstructions}`);
+
+    try {
+        const result = await runScoutAgent(targetInfo, customInstructions);
+
+        if (result) {
+            res.status(200).json({
+                status: 'success',
+                message: 'Scout has completed the reconnaissance mission.',
+                data: result
+            });
+        } else {
+            res.status(500).json({ status: 'error', message: 'Scout failed to execute.' });
+        }
+    } catch (error) {
+        console.error('[-] Scout API Error:', error);
+        res.status(500).json({ status: 'error', message: 'Internal Server Error during scan.' });
+    }
+});
+
+// ==========================================
+// REDSWARM: BREACHER AGENT API
+// ==========================================
+app.post('/api/v1/redswarm/breach', async(req, res) => {
+    const { targetInfo, scanResults, customInstructions } = req.body;
+
+    if (!targetInfo || !scanResults) {
+        return res.status(400).json({ error: 'Missing targetInfo or scanResults in request body' });
+    }
+
+    console.log(`\n[⚔️] Deploying Breacher against: ${targetInfo}`);
+
+    try {
+        const result = await runBreacherAgent(targetInfo, scanResults, customInstructions);
+
+        if (result) {
+            res.status(200).json({
+                status: 'success',
+                message: 'Breacher has formulated the attack plan.',
+                data: result
+            });
+        } else {
+            res.status(500).json({ status: 'error', message: 'Breacher failed to formulate a plan.' });
+        }
+    } catch (error) {
+        console.error('[-] Breacher API Error:', error);
+        res.status(500).json({ status: 'error', message: 'Internal Server Error during breach planning.' });
+    }
+});
+
+// ==========================================
+// REDSWARM: PHANTOM AGENT API
+// ==========================================
+app.post('/api/v1/redswarm/phantom', async(req, res) => {
+    const { targetInfo, shellContext, customInstructions } = req.body;
+
+    if (!targetInfo || !shellContext) {
+        return res.status(400).json({ error: 'Missing targetInfo or shellContext in request body' });
+    }
+
+    console.log(`\n[👻] Deploying Phantom for privilege escalation on: ${targetInfo}`);
+
+    try {
+        const result = await runPhantomAgent(targetInfo, shellContext, customInstructions);
+
+        if (result) {
+            res.status(200).json({
+                status: 'success',
+                message: 'Phantom has generated the escalation payloads.',
+                data: result
+            });
+        } else {
+            res.status(500).json({ status: 'error', message: 'Phantom failed to generate payloads.' });
+        }
+    } catch (error) {
+        console.error('[-] Phantom API Error:', error);
+        res.status(500).json({ status: 'error', message: 'Internal Server Error during escalation planning.' });
+    }
+});
+
+// ==========================================
+// REDSWARM: CHAMELEON AGENT API
+// ==========================================
+app.post('/api/v1/redswarm/chameleon', async(req, res) => {
+    const { targetInfo, failedPayload, wafContext, customInstructions } = req.body;
+
+    if (!targetInfo || !failedPayload || !wafContext) {
+        return res.status(400).json({ error: 'Missing targetInfo, failedPayload, or wafContext in request body' });
+    }
+
+    console.log(`\n[🦎] Deploying Chameleon to bypass WAF for: ${targetInfo}`);
+
+    try {
+        const result = await runChameleonAgent(targetInfo, failedPayload, wafContext, customInstructions);
+
+        if (result) {
+            res.status(200).json({
+                status: 'success',
+                message: 'Chameleon has successfully tuned the payload.',
+                data: result
+            });
+        } else {
+            res.status(500).json({ status: 'error', message: 'Chameleon failed to tune the payload.' });
+        }
+    } catch (error) {
+        console.error('[-] Chameleon API Error:', error);
+        res.status(500).json({ status: 'error', message: 'Internal Server Error during payload tuning.' });
+    }
+});
+
+// ==========================================
+// REDSWARM: OVERLORD & SCRIBE APIs
+// ==========================================
+app.post('/api/v1/redswarm/overlord', async(req, res) => {
+    const { targetInfo, allAgentsData } = req.body;
+    if (!targetInfo || !allAgentsData) return res.status(400).json({ error: 'Missing data' });
+
+    console.log(`\n[👑] Overlord requested for: ${targetInfo}`);
+    try {
+        const result = await runOverlordAgent(targetInfo, allAgentsData);
+        res.status(200).json({ status: 'success', data: result });
+    } catch (error) {
+        console.error('[-] Overlord API Crash:', error); // ضفنا دي
+        res.status(500).json({ status: 'error', message: error.message });
+    }
+});
+
+app.post('/api/v1/redswarm/scribe', async(req, res) => {
+    const { targetInfo, campaignHistory } = req.body;
+    if (!targetInfo || !campaignHistory) return res.status(400).json({ error: 'Missing data' });
+
+    console.log(`\n[📝] Scribe is generating final report for: ${targetInfo}`);
+    try {
+        const report = await runScribeAgent(targetInfo, campaignHistory);
+        res.status(200).json({ status: 'success', report_markdown: report });
+    } catch (error) {
+        console.error('[-] Overlord API Crash:', error); // ضفنا دي
+        res.status(500).json({ status: 'error', message: error.message });
+    }
+});
+
+const PORT = process.env.PORT || 3000;
+// ==========================================
+// BAYEZID STARTUP SEQUENCE & MODE SELECTION
+// ==========================================
+const startBayezidServer = () => {
+    const server = app.listen(PORT, async() => {
+        console.log(`\n=================================`);
+        console.log(`[+] Bayezid Cognitive Engine V3 LIVE`);
+
+        if (global.BAYEZID_MODE === 'RED') {
+            console.log(`[🔥] MODE: RED TEAM (Offensive Pentesting Active)`);
+            console.log(`[+] Project RedSwarm Squad is standing by.`);
+        } else {
+            console.log(`[🛡️] MODE: BLUE TEAM (Defensive SOAR Active)`);
+            console.log(`[+] Dual-Engine Ready (Local/Cloud) 🔀`);
+            console.log(`[+] Global Threat Intel (CTI): ENABLED 🌍`);
+        }
+
+        console.log(`[+] Web Dashboard Running on http://localhost:${PORT} 🖥️`);
+        console.log(`=================================\n`);
+
+        if (typeof loadMitreDatabase === 'function' && global.BAYEZID_MODE === 'BLUE') {
+            await loadMitreDatabase();
+        }
+    });
+
+    server.on('error', (error) => {
+        if (error.code === 'EADDRINUSE') {
+            console.error(`\n[!] ERROR: Port ${PORT} is currently in use!`);
+        } else {
+            console.error('\n[-] Server Crash:', error.message);
+        }
+    });
+};
+
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+
+console.log(`\n=============================================`);
+console.log(` 🦅 WELCOME TO BAYEZID CYBER SYSTEM 🦅 `);
+console.log(`=============================================`);
+console.log(`Please select operational mode:`);
+console.log(`[1] 🛡️  BLUE TEAM (Defensive SOAR & Log Analysis)`);
+console.log(`[2] ⚔️  RED TEAM (Offensive AI Pentesting)`);
+
+rl.question('\nEnter your choice (1 or 2): ', (answer) => {
+    if (answer.trim() === '2') {
+        global.BAYEZID_MODE = 'RED';
+    } else {
+        global.BAYEZID_MODE = 'BLUE';
+    }
+    rl.close();
+    startBayezidServer();
 });
