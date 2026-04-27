@@ -1,4 +1,4 @@
-# Bayezid Hybrid SOC Environment V0.2.4 (The Cognitive & Real-Time Update)
+# Bayezid Hybrid SOC Environment V0.3.4 (The Cognitive & Real-Time Update)
 
 ![Version](https://img.shields.io/badge/Version-3.0-red.svg)
 ![Node.js](https://img.shields.io/badge/Node.js-20.x-green.svg)
@@ -133,6 +133,6 @@ AUTO_BLOCK_CONFIDENCE=90
 
 ---
 
-**Bayezid Fighter** — *The system that remembers...The intelligence that acts.*
+**Bayezid Fighter** — **Yildirim Logic — The Strike Before the Signal**
 
 Developed by: **Ahmed Mo'men Ahmed** | 2026.
