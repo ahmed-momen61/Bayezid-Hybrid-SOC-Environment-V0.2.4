@@ -37,6 +37,7 @@ model Alert {
   messages           ChatMessage[]
   
   createdAt          DateTime @default(now())
+  chats     IncidentChat[]
 }
 
 model Playbook {
@@ -75,4 +76,14 @@ model SystemConfig {
   key       String   @unique
   value     String
   updatedAt DateTime @updatedAt
+}
+
+model IncidentChat {
+  id        String   @id @default(uuid())
+  alertId   String
+  sender    String   // (e.g., "Ahmed", "Youssef", "Bayezid-Action")
+  message   String
+  createdAt DateTime @default(now())
+  
+  alert     Alert    @relation(fields: [alertId], references: [id])
 }

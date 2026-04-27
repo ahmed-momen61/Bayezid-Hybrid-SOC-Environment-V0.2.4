@@ -4,12 +4,14 @@ const dotenv = require('dotenv');
 const { PrismaClient } = require('@prisma/client');
 const path = require('path');
 const { processTuningCommand, liveConfig } = require('./tuningService');
-const { analyzeWithVertexAI, analyzeWithLocalModel, orchestrateRedSwarm, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent } = require('./aiService');
+const { analyzeWithVertexAI, analyzeWithLocalModel, orchestrateRedSwarm, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent, runActionAgent } = require('./aiService');
 const { executePlaybook } = require('./playbookService');
 const { enrichWithOSINT } = require('./osintService');
 const { sendTelegramAlert } = require('./notificationService');
 const { loadMitreDatabase } = require('./ragService');
 const { enrichWithCTI } = require('./ctiService');
+
+
 
 dotenv.config();
 
@@ -217,6 +219,85 @@ const handleSecurityAlert = async(req, res) => {
 };
 
 app.post('/api/v1/alerts/ingest', handleSecurityAlert);
+
+// ==========================================
+// 💬 DIGITAL WAR ROOM (CHAT API)
+// ==========================================
+
+// 1. جلب رسايل الشات الخاصة بـ Alert معين
+app.get('/api/v1/alerts/:id/chat', async(req, res) => {
+    try {
+        const chats = await prisma.incidentChat.findMany({
+            where: { alertId: req.params.id },
+            orderBy: { createdAt: 'asc' }
+        });
+        res.json({ status: 'success', data: chats });
+    } catch (error) {
+        res.status(500).json({ status: 'error', message: error.message });
+    }
+});
+
+// 2. إرسال رسالة جديدة لغرفة العمليات
+// 2. إرسال رسالة جديدة لغرفة العمليات (وتشغيل الذكاء الاصطناعي لو اتعمله منشن)
+app.post('/api/v1/alerts/:id/chat', async(req, res) => {
+    const { sender, message } = req.body;
+    const alertId = req.params.id;
+
+    if (!sender || !message) {
+        return res.status(400).json({ error: 'Sender and message are required' });
+    }
+
+    try {
+        // 1. حفظ رسالة اليوزر في الداتا بيز
+        const newChat = await prisma.incidentChat.create({
+            data: { alertId, sender, message }
+        });
+        console.log(`[💬] New message in War Room ${alertId} from ${sender}: ${message}`);
+
+        // 🤖 2. التحقق: هل اليوزر بينادي على بيازيد؟
+        if (message.includes('@Bayezid-Action') || message.includes('@bayezid')) {
+
+            // نجيب تفاصيل التنبيه من الداتا بيز عشان الـ AI يفهم السياق
+            const alertData = await prisma.alert.findUnique({ where: { id: alertId } });
+
+            // نصحي بيازيد ونبعتله الأمر
+            const aiService = require('./aiService'); // استدعاء لحظي (Dynamic Require) لتجنب اللغبطة
+            const aiDecision = await aiService.runActionAgent(alertData, message);
+
+            if (aiDecision) {
+                // 3. بيازيد يرد في الشات
+                await prisma.incidentChat.create({
+                    data: {
+                        alertId,
+                        sender: "Bayezid-Action 🤖",
+                        message: `${aiDecision.agent_reply}\n\n[⚙️ Action Executed: ${aiDecision.recommended_playbook} on ${aiDecision.target_ip}]`
+                    }
+                });
+
+                // 4. تنفيذ الأكشن الفعلي (ضرب الـ Playbook بالنار)
+                const mockAiResponseForPlaybook = {
+                    severity: alertData.severity,
+                    threat_type: alertData.threatType,
+                    extracted_ip: aiDecision.target_ip || alertData.sourceIp,
+                    recommended_action: aiDecision.understood_intent
+                };
+
+                await executePlaybook(alertId, mockAiResponseForPlaybook, { source_ip: mockAiResponseForPlaybook.extracted_ip });
+
+                // تحديث حالة الأليرت إنه اتعمله استجابة
+                await prisma.alert.update({
+                    where: { id: alertId },
+                    data: { status: 'RESOLVED_BY_WAR_ROOM' }
+                });
+            }
+        }
+
+        res.status(200).json({ status: 'success', data: newChat });
+    } catch (error) {
+        console.error('[-] Chat API Error:', error.message);
+        res.status(500).json({ status: 'error', message: error.message });
+    }
+});
 
 const handleSimulationRun = async(req, res) => {
     const { attackType, logFormat, logData, parameters } = req.body;
@@ -537,7 +618,7 @@ const startEscalationWatcher = () => {
             });
 
             for (const alert of expiredAlerts) {
-                console.log(`\n[⏰] SLA TIMEOUT: Alert ${alert.id} exceeded ${ESCALATION_TIMEOUT_MINUTES} mins!`);
+                console.log(`\n[⏰] SLA TIMEOUT: Alert ${alert.id} exceeded ${liveConfig.SLA_TIMEOUT_MINUTES} mins!`);
                 console.log(`[🤖] Bayezid taking over. Auto-Escalating threat: ${alert.threatType}`);
 
                 // 1. نغير الحالة عشان مننفذوش تاني

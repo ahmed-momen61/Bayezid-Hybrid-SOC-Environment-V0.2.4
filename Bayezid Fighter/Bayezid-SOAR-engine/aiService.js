@@ -253,7 +253,7 @@ const askRedSwarmAI = async(prompt, requireJson = true) => {
             // 2. Fallback Attempt: Local AI (Ollama)
             // Ensure we send to Ollama and request JSON if required
             const localResponse = await axios.post('http://localhost:11434/api/generate', {
-                model: process.env.LOCAL_MODEL_NAME || "qwen", // Can pull model name from .env or use qwen as default
+                model: process.env.LOCAL_MODEL_NAME || "qwen2.5-coder:7b", // Can pull model name from .env or use qwen as default
                 prompt: prompt + (requireJson ? "\n\nCRITICAL: You MUST return ONLY valid JSON formatting." : ""),
                 stream: false,
                 format: requireJson ? "json" : "" // Ollama feature that forces JSON output
@@ -603,6 +603,41 @@ const runScribeAgent = async(targetInfo) => {
     }
 };
 
+// ==========================================
+// 🛡️ SOC WAR ROOM: Action Agent (Execution)
+// ==========================================
+const runActionAgent = async(alertContext, userCommand) => {
+    console.log(`\n[🤖] Bayezid-Action summoned! Analyzing command: ${userCommand}`);
+
+    try {
+        const actionPrompt = `You are 'Bayezid-Action', the SOAR Execution Agent in a SOC War Room.
+        Incident Context (Database Record): ${JSON.stringify(alertContext)}
+        User Command from Chat: "${userCommand}"
+
+        Your task:
+        1. Understand what the SOC Analyst wants to do from the command.
+        2. Identify the target IP or entity.
+        3. Determine the correct playbook to execute (e.g., BLOCK_IP, ISOLATE_HOST, CLOSE_PORT).
+        4. Draft a professional confirmation reply to the team in the exact same language they used (Arabic/Franco/English).
+
+        Strictly return JSON:
+        {
+            "understood_intent": "Brief summary of what you are about to do",
+            "recommended_playbook": "BLOCK_IP" | "ISOLATE_HOST" | "CUSTOM_ACTION",
+            "target_ip": "The IP address to block/isolate",
+            "agent_reply": "Your message to the chat confirming the action (e.g., 'Roger that. Blocking IP 192.168.1.5 now...')"
+        }`;
+
+        // استخدمنا الدالة بتاعتك اللي فيها Fallback للكلاود واللوكال
+        const decision = await askRedSwarmAI(actionPrompt, true);
+        return decision;
+
+    } catch (error) {
+        console.error('[-] Action Agent Error:', error.message);
+        return null;
+    }
+};
+
 module.exports = {
     analyzeWithVertexAI,
     analyzeWithLocalModel,
@@ -612,5 +647,6 @@ module.exports = {
     runPhantomAgent,
     runChameleonAgent,
     runOverlordAgent,
-    runScribeAgent
+    runScribeAgent,
+    runActionAgent
 };
