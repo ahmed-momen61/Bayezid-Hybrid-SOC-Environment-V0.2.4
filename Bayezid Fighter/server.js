@@ -5,7 +5,7 @@ const dotenv = require('dotenv');
 const { PrismaClient } = require('@prisma/client');
 const path = require('path');
 const { processTuningCommand, liveConfig } = require('./tuningService');
-const { analyzeWithVertexAI, analyzeWithLocalModel, orchestrateRedSwarm, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent, runActionAgent } = require('./aiService');
+const { analyzeWithVertexAI, analyzeWithLocalModel, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent, runActionAgent } = require('./aiService');
 const { executePlaybook } = require('./playbookService');
 const { enrichWithOSINT } = require('./osintService');
 const { sendTelegramAlert } = require('./notificationService');
@@ -394,7 +394,7 @@ app.post('/api/v1/redswarm/engage', async(req, res) => {
 
     try {
         const state = currentState || "Starting new engagement. Need initial reconnaissance.";
-        const decision = await orchestrateRedSwarm(targetInfo, state);
+        const decision = await runOverlordAgent(targetInfo);
 
         if (decision) {
             res.status(200).json({

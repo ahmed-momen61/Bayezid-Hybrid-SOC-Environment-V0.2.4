@@ -10,6 +10,57 @@ const util = require('util');
 const { exec } = require('child_process');
 const execPromise = util.promisify(exec);
 
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+// --- THE SMART EXECUTION ENGINE ---
+const smartExec = async(command, timeoutMs, isBackground) => {
+    if (isBackground) {
+        const logFile = path.join(__dirname, `job_${Date.now()}.log`);
+        const out = fs.openSync(logFile, 'a');
+        const err = fs.openSync(logFile, 'a');
+
+        const child = spawn(command, {
+            shell: true,
+            detached: true,
+            stdio: ['ignore', out, err]
+        });
+        child.unref();
+
+        return {
+            stdout: `[BACKGROUND JOB STARTED] PID: ${child.pid}.\nLogs saving to: ${logFile}.`,
+            stderr: ""
+        };
+    }
+
+    try {
+        const { stdout, stderr } = await execPromise(command, { timeout: timeoutMs, maxBuffer: 1024 * 1024 * 10 });
+        return { stdout, stderr };
+    } catch (err) {
+        if (err.killed && err.signal === 'SIGTERM') {
+            return {
+                stdout: `[⚠️ TIMEOUT AFTER ${timeoutMs/1000}s] Partial Output Salvaged:\n${err.stdout || ""}`,
+                stderr: err.stderr || ""
+            };
+        }
+        throw err;
+    }
+};
+
+// --- SHARED MEMORY SYSTEM: Let agents learn from each other ---
+const getSharedMemory = async(targetIp) => {
+    try {
+        const logs = await prisma.redSwarmLog.findMany({
+            where: { targetIp: targetIp, isSuccess: true },
+            orderBy: { createdAt: 'desc' },
+            take: 5
+        });
+        if (logs.length === 0) return "No previous successful actions. Starting fresh.";
+        return logs.map(l => `[${l.agentName} SUCCESS]: ${l.executedCommand}`).join('\n');
+    } catch (e) { return "Memory currently unavailable."; }
+};
+
 const deepSanitize = (obj) => {
     if (typeof obj !== 'object' || obj === null) return;
     for (let key in obj) {
@@ -228,7 +279,6 @@ const orchestrateRedSwarm = async(targetInfo, currentState) => {
 
 const askRedSwarmAI = async(prompt, requireJson = true) => {
     try {
-
         const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
         const model = genAI.getGenerativeModel({
             model: "gemini-2.5-flash",
@@ -236,24 +286,35 @@ const askRedSwarmAI = async(prompt, requireJson = true) => {
         });
 
         const response = await model.generateContent(prompt);
-        const text = response.response.text();
-        return requireJson ? JSON.parse(text) : text;
+        let text = response.response.text();
+
+        // تنظيف الـ Markdown لو موجود عشان ميعملش Crash
+        if (requireJson) {
+            text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
+            return JSON.parse(text);
+        }
+        return text;
 
     } catch (cloudError) {
         console.warn(`\n[⚠️] Gemini Cloud Failed: ${cloudError.message}`);
         console.log(`[🔄] Initiating Fallback to Local AI (Ollama/Qwen)...`);
 
         try {
-
             const localResponse = await axios.post('http://localhost:11434/api/generate', {
                 model: process.env.LOCAL_MODEL_NAME || "qwen2.5-coder:7b",
-                prompt: prompt + (requireJson ? "\n\nCRITICAL: You MUST return ONLY valid JSON formatting." : ""),
+                prompt: prompt + (requireJson ? "\n\nCRITICAL: You MUST return ONLY valid JSON formatting without markdown blocks." : ""),
                 stream: false,
                 format: requireJson ? "json" : ""
             });
 
-            const text = localResponse.data.response;
-            return requireJson ? JSON.parse(text) : text;
+            let text = localResponse.data.response;
+
+            // تنظيف الـ Markdown للوكال برضه
+            if (requireJson) {
+                text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
+                return JSON.parse(text);
+            }
+            return text;
 
         } catch (localError) {
             console.error(`[❌] Local AI also failed. System is blind: ${localError.message}`);
@@ -264,323 +325,264 @@ const askRedSwarmAI = async(prompt, requireJson = true) => {
 
 const runScoutAgent = async(targetInfo, customInstructions = "") => {
     console.log(`\n[👁️] Waking up Scout (Recon Agent) for Target: ${targetInfo}...`);
-
     try {
-        const scoutPrompt = `You are 'Scout', the elite Reconnaissance Agent of Project RedSwarm.
-        Target: ${targetInfo}
-        User Custom Instructions (if any): ${customInstructions || "None"}
+        const sharedMemory = await getSharedMemory(targetInfo);
+        const scoutPrompt = `You are 'Scout', the elite Recon Agent. Target: ${targetInfo}.
+        Recent Team Successes (Shared Memory): ${sharedMemory}
+        Instructions: ${customInstructions || "None"}
 
-        Your task:
-        1. Formulate the absolute best and safest 'nmap' command based on the target and any user instructions.
-        2. Provide 2 alternative 'nmap' commands (e.g., full port scan, UDP scan, or stealth scan).
+        Task:
+        1. Formulate the best aggressive Linux command for footprinting (nmap, ffuf, nuclei).
+        2. Actively look for WAFs, API endpoints, and exposed directories.
+        3. Estimate the time needed. If > 2 minutes, set "run_in_background": true.
         
         Strictly return JSON:
         {
-            "best_command": "nmap ...",
-            "reasoning": "Why this is the best command",
-            "alternatives": [
-                { "command": "...", "description": "..." },
-                { "command": "...", "description": "..." }
-            ]
+            "best_command": "...",
+            "estimated_timeout_ms": 60000,
+            "run_in_background": false,
+            "reasoning": "...",
+            "alternatives": [ { "command": "...", "description": "..." } ]
         }`;
 
-
         const aiDecision = await askRedSwarmAI(scoutPrompt, true);
+        let executionOutput = "";
+        let finalCommand = aiDecision.best_command;
+        let success = false;
+        const timeoutMs = aiDecision.estimated_timeout_ms || 30000;
+        const isBackground = aiDecision.run_in_background || false;
+        const commandsToTry = [aiDecision.best_command, ...(aiDecision.alternatives || []).map(a => a.command)];
 
-        console.log(`[🤖] Scout decided the best command is: ${aiDecision.best_command}`);
-        console.log(`[⚙️] Executing command physically on host... Please wait (this may take a minute).`);
-
-        let scanOutput = "";
-        try {
-            const { stdout, stderr } = await execPromise(aiDecision.best_command);
-            scanOutput = stdout || stderr;
-            console.log(`[✅] Scan completed successfully.`);
-        } catch (execError) {
-            console.log(`[❌] Execution failed. Is Nmap installed on this Windows machine?`);
-            scanOutput = `Execution Error: ${execError.message}\nMake sure Nmap is installed and added to system PATH.`;
+        for (let cmd of commandsToTry) {
+            if (!cmd) continue;
+            console.log(`[⚙️] Scout Executing: ${cmd} (Timeout: ${timeoutMs/1000}s | BG: ${isBackground})`);
+            try {
+                const { stdout, stderr } = await smartExec(cmd, timeoutMs, isBackground);
+                executionOutput = stdout || stderr;
+                success = true;
+                finalCommand = cmd;
+                break;
+            } catch (err) {
+                console.log(`[⚠️] Command failed. Retrying...`);
+                executionOutput = err.message;
+            }
         }
 
-
-        await prisma.redSwarmLog.create({
-            data: {
-                targetIp: targetInfo,
-                agentName: "Scout",
-                assignedTask: customInstructions || "Execute initial reconnaissance",
-                executedCommand: aiDecision.best_command,
-                executionOutput: scanOutput,
-                isSuccess: !scanOutput.includes("Execution Error")
-            }
-        });
-
-        return {
-            agent: "Scout",
-            executed_command: aiDecision.best_command,
-            reasoning: aiDecision.reasoning,
-            scan_results: scanOutput,
-            alternative_options: aiDecision.alternatives,
-            next_action: "Review the scan_results. If satisfied, target is ready for Breacher. If not, re-run Scout with an alternative command or custom instructions."
-        };
-
-    } catch (error) {
-        console.error('[-] Scout Agent error:', error.message);
-        return null;
-    }
+        await prisma.redSwarmLog.create({ data: { targetIp: targetInfo, agentName: "Scout", assignedTask: "Recon", executedCommand: finalCommand, executionOutput: executionOutput, isSuccess: success } });
+        return { agent: "Scout", scan_results: executionOutput, next_action: "Hand over to Breacher." };
+    } catch (error) { console.error('[-] Scout Error:', error.message); return null; }
 };
 
 const runBreacherAgent = async(targetInfo, scanResults, customInstructions = "") => {
-    console.log(`\n[⚔️] Waking up Breacher (Initial Access Agent) for Target: ${targetInfo}...`);
-
+    console.log(`\n[⚔️] Waking up Breacher (Exploitation Agent) for Target: ${targetInfo}...`);
     try {
-        const breacherPrompt = `You are 'Breacher', the Initial Access and Exploitation Agent of Project RedSwarm.
-        Target: ${targetInfo}
-        Nmap Scan Results / Recon Data:
-        ${scanResults}
+        const sharedMemory = await getSharedMemory(targetInfo);
+        const breacherPrompt = `You are 'Breacher', the Initial Access Agent. Target: ${targetInfo}.
+        Recent Team Successes (Shared Memory): ${sharedMemory}
+        Recon Data: ${scanResults}
         
-        User Custom Instructions (if any): ${customInstructions || "None"}
-
-        Your task:
-        1. Analyze the scan results to find the weakest link (e.g., open SSH, HTTP login, vulnerable FTP).
-        2. Provide the absolute best attack command to get initial access (e.g., a specific hydra command, curl exploit, or Metasploit module path).
-        3. Provide 2 alternative attack vectors.
+        Task (Phase 3):
+        1. Analyze scan results. Look for SSTI, Deserialization, SSRF, SQLi, LFI/RFI.
+        2. Formulate the exact attack command (curl, hydra, sqlmap) for RCE/Initial Access.
+        3. Estimate timeout. If > 2 minutes, set "run_in_background": true.
 
         Strictly return JSON:
         {
-            "primary_attack_vector": "Name of the vulnerability or method",
-            "best_command": "exact command to run in terminal",
-            "reasoning": "Why this is the best entry point",
-            "alternatives": [
-                { "method": "...", "command": "...", "description": "..." }
-            ]
+            "primary_attack_vector": "...",
+            "best_command": "...",
+            "estimated_timeout_ms": 60000,
+            "run_in_background": false,
+            "reasoning": "...",
+            "alternatives": [ { "command": "...", "description": "..." } ]
         }`;
 
-
         const aiDecision = await askRedSwarmAI(breacherPrompt, true);
+        let executionOutput = "";
+        let finalCommand = aiDecision.best_command;
+        let success = false;
+        const timeoutMs = aiDecision.estimated_timeout_ms || 30000;
+        const isBackground = aiDecision.run_in_background || false;
+        const commandsToTry = [aiDecision.best_command, ...(aiDecision.alternatives || []).map(a => a.command)];
 
-        console.log(`[🎯] Breacher identified primary vector: ${aiDecision.primary_attack_vector}`);
-        console.log(`[🔥] Recommended Command: ${aiDecision.best_command}`);
-
-
-        await prisma.redSwarmLog.create({
-            data: {
-                targetIp: targetInfo,
-                agentName: "Breacher",
-                assignedTask: customInstructions || "Analyze recon data and formulate breach plan",
-                executedCommand: aiDecision.best_command,
-                executionOutput: `Vector: ${aiDecision.primary_attack_vector} | Reasoning: ${aiDecision.reasoning}`,
-                isSuccess: true
+        for (let cmd of commandsToTry) {
+            if (!cmd) continue;
+            console.log(`[⚙️] Breacher Executing: ${cmd}`);
+            try {
+                const { stdout, stderr } = await smartExec(cmd, timeoutMs, isBackground);
+                executionOutput = stdout || stderr;
+                success = true;
+                finalCommand = cmd;
+                break;
+            } catch (err) {
+                console.log(`[⚠️] Exploit failed. Trying next vector...`);
+                executionOutput = err.message;
             }
-        });
+        }
 
-        return {
-            agent: "Breacher",
-            target: targetInfo,
-            attack_plan: aiDecision,
-            next_action: "Execute the 'best_command' on your attacker machine (Kali). If successful, hand over the resulting shell to Phantom (Escalation Agent)."
-        };
-
-    } catch (error) {
-        console.error('[-] Breacher Agent error:', error.message);
-        return null;
-    }
+        await prisma.redSwarmLog.create({ data: { targetIp: targetInfo, agentName: "Breacher", assignedTask: "Initial Foothold", executedCommand: finalCommand, executionOutput: executionOutput, isSuccess: success } });
+        return { agent: "Breacher", output: executionOutput };
+    } catch (error) { console.error('[-] Breacher Error:', error.message); return null; }
 };
 
 const runPhantomAgent = async(targetInfo, shellContext, customInstructions = "") => {
-    console.log(`\n[👻] Waking up Phantom (Escalation Agent) for Target: ${targetInfo}...`);
-
+    console.log(`\n[👻] Waking up Phantom (PrivEsc & OS Ghost) for Target: ${targetInfo}...`);
     try {
-        const phantomPrompt = `You are 'Phantom', the Privilege Escalation and Persistence Agent of Project RedSwarm.
-        Target: ${targetInfo}
-        Current Shell Context / Access Level:
-        ${shellContext}
+        const sharedMemory = await getSharedMemory(targetInfo);
+        const phantomPrompt = `You are 'Phantom', the OS Internals Agent. Target: ${targetInfo}.
+        Recent Team Successes (Shared Memory): ${sharedMemory}
+        Context: ${shellContext}
         
-        User Custom Instructions (if any): ${customInstructions || "None"}
-
-        Your task:
-        1. Analyze the current shell access (e.g., low privilege user, restricted shell, web shell).
-        2. Provide the absolute best command(s) to escalate privileges to root, bypass restrictions, or establish persistence (e.g., Python PTY spawn, Reverse Shell payload, LinPEAS one-liner, modifying /etc/passwd).
-        3. Provide 2 alternative escalation/persistence methods.
-
+        Task (Phases 4-5):
+        1. Analyze OS context. Check for Docker Breakout or Active Directory.
+        2. Use 'Living off the Land' (LotL) techniques (certutil, bash, wmic) to avoid EDR.
+        3. Formulate PrivEsc command to ROOT/SYSTEM.
+        
         Strictly return JSON:
         {
-            "primary_escalation_vector": "Name of the technique",
-            "best_command": "exact command to run in the compromised shell",
-            "reasoning": "Why this works for the given context",
-            "alternatives": [
-                { "method": "...", "command": "...", "description": "..." }
-            ]
+            "primary_escalation_vector": "...",
+            "best_command": "...",
+            "estimated_timeout_ms": 45000,
+            "run_in_background": false,
+            "reasoning": "...",
+            "alternatives": [ { "command": "...", "description": "..." } ]
         }`;
 
-
         const aiDecision = await askRedSwarmAI(phantomPrompt, true);
+        let executionOutput = "";
+        let finalCommand = aiDecision.best_command;
+        let success = false;
+        const timeoutMs = aiDecision.estimated_timeout_ms || 30000;
+        const isBackground = aiDecision.run_in_background || false;
+        const commandsToTry = [aiDecision.best_command, ...(aiDecision.alternatives || []).map(a => a.command)];
 
-        console.log(`[👻] Phantom suggests technique: ${aiDecision.primary_escalation_vector}`);
-        console.log(`[🔑] Payload: ${aiDecision.best_command}`);
-
-
-        await prisma.redSwarmLog.create({
-            data: {
-                targetIp: targetInfo,
-                agentName: "Phantom",
-                assignedTask: customInstructions || "Formulate privilege escalation plan",
-                executedCommand: aiDecision.best_command,
-                executionOutput: `Vector: ${aiDecision.primary_escalation_vector} | Reasoning: ${aiDecision.reasoning}`,
-                isSuccess: true
+        for (let cmd of commandsToTry) {
+            if (!cmd) continue;
+            console.log(`[⚙️] Phantom Executing: ${cmd}`);
+            try {
+                const { stdout, stderr } = await smartExec(cmd, timeoutMs, isBackground);
+                executionOutput = stdout || stderr;
+                success = true;
+                finalCommand = cmd;
+                break;
+            } catch (err) {
+                console.log(`[⚠️] Escalation failed. Trying fallback...`);
+                executionOutput = err.message;
             }
-        });
+        }
 
-        return {
-            agent: "Phantom",
-            target: targetInfo,
-            escalation_plan: aiDecision,
-            next_action: "Execute the payload in your target shell. If blocked by WAF/Filters, call Chameleon (Tuning Agent)."
-        };
-
-    } catch (error) {
-        console.error('[-] Phantom Agent error:', error.message);
-        return null;
-    }
+        await prisma.redSwarmLog.create({ data: { targetIp: targetInfo, agentName: "Phantom", assignedTask: "Privilege Escalation", executedCommand: finalCommand, executionOutput: executionOutput, isSuccess: success } });
+        return { agent: "Phantom", output: executionOutput };
+    } catch (error) { console.error('[-] Phantom Error:', error.message); return null; }
 };
 
 const runChameleonAgent = async(targetInfo, failedPayload, wafContext, customInstructions = "") => {
-    console.log(`\n[🦎] Waking up Chameleon (Tuning Agent) to bypass filters on Target: ${targetInfo}...`);
-
+    console.log(`\n[🦎] Chameleon Activated: Evaluating environment for Evasion/Cleanup...`);
     try {
-        const chameleonPrompt = `You are 'Chameleon', the Defense Evasion and Payload Tuning Agent of Project RedSwarm.
+        const sharedMemory = await getSharedMemory(targetInfo);
+        const chameleonPrompt = `You are 'Chameleon', the Stealth & Anti-Forensics Agent.
         Target: ${targetInfo}
-        Failed Payload / Blocked Command: ${failedPayload}
-        WAF/Filter Context (Why it failed): ${wafContext}
-        User Custom Instructions (if any): ${customInstructions || "None"}
-
-        Your task:
-        1. Analyze why the payload was blocked based on the WAF context.
-        2. Rewrite, obfuscate, or encode the payload so it bypasses the filter while maintaining its original goal. Use techniques like Base64 encoding, hexadecimal, string splitting, or alternative binaries (e.g., using 'awk' or 'php' instead of 'python').
-        3. Provide 2 alternative tuned payloads.
-
+        Failed Attempt: ${failedPayload || "None"}
+        Recent Team Successes: ${sharedMemory}
+        
+        YOUR MISSION:
+        1. IF ACTION IS 'CLEANUP': Dynamically identify the OS (Linux/Windows/macOS) from the context. Generate aggressive, zero-code commands to wipe traces, kill suspicious processes, and clear logs SPECIFIC to that OS. 
+        2. IF ACTION IS 'EVASION': Obfuscate the failed payload to bypass WAF/EDR using LotL (Living off the Land).
+        
         Strictly return JSON:
         {
-            "obfuscation_technique": "Name of the evasion technique used",
-            "tuned_payload": "The exact modified command to execute",
-            "reasoning": "Why this specific payload will bypass the described filter",
-            "alternatives": [
-                { "technique": "...", "tuned_payload": "...", "description": "..." }
-            ]
+            "action_type": "CLEANUP" | "EVASION",
+            "os_detected": "Linux" | "Windows" | "macOS",
+            "best_command": "exact command to execute",
+            "estimated_timeout_ms": 30000,
+            "run_in_background": false,
+            "reasoning": "...",
+            "alternatives": [ { "command": "...", "description": "..." } ]
         }`;
 
-
         const aiDecision = await askRedSwarmAI(chameleonPrompt, true);
+        console.log(`[🦎] Chameleon Action: ${aiDecision.action_type} on ${aiDecision.os_detected}`);
 
-        console.log(`[🦎] Chameleon applied technique: ${aiDecision.obfuscation_technique}`);
-        console.log(`[✨] Tuned Payload: ${aiDecision.tuned_payload}`);
+        let executionOutput = "";
+        let finalCommand = aiDecision.best_command;
+        let success = false;
+        const timeoutMs = aiDecision.estimated_timeout_ms || 30000;
+        const isBackground = aiDecision.run_in_background || false;
+        const commandsToTry = [aiDecision.best_command, ...(aiDecision.alternatives || []).map(a => a.command)];
 
+        for (let cmd of commandsToTry) {
+            if (!cmd) continue;
+            console.log(`[⚙️] Chameleon Executing: ${cmd} (Timeout: ${timeoutMs/1000}s | BG: ${isBackground})`);
+            try {
+                const { stdout, stderr } = await smartExec(cmd, timeoutMs, isBackground);
+                executionOutput = stdout || stderr || "Execution completed with no output.";
+                success = true;
+                finalCommand = cmd;
+                break;
+            } catch (err) { executionOutput = err.message; }
+        }
 
-        await prisma.redSwarmLog.create({
-            data: {
-                targetIp: targetInfo,
-                agentName: "Chameleon",
-                assignedTask: customInstructions || `Bypass WAF for failed payload`,
-                executedCommand: aiDecision.tuned_payload,
-                executionOutput: `Technique: ${aiDecision.obfuscation_technique} | Reasoning: ${aiDecision.reasoning}`,
-                isSuccess: true
-            }
-        });
-
-        return {
-            agent: "Chameleon",
-            target: targetInfo,
-            evasion_plan: aiDecision,
-            next_action: "Execute the 'tuned_payload'. If it succeeds, the filter is bypassed. If not, feed the new error back to Chameleon."
-        };
-
+        await prisma.redSwarmLog.create({ data: { targetIp: targetInfo, agentName: "Chameleon", assignedTask: aiDecision.action_type, executedCommand: finalCommand, executionOutput: executionOutput, isSuccess: success } });
+        return { agent: "Chameleon", output: executionOutput };
     } catch (error) {
-        console.error('[-] Chameleon Agent error:', error.message);
+        console.error('[-] Chameleon Error:', error.message);
         return null;
     }
 };
 
 const runOverlordAgent = async(targetInfo) => {
-    console.log(`\n[👑] The Overlord is reviewing the database logs for Target: ${targetInfo}...`);
-
+    console.log(`\n[👑] The Overlord is reviewing the Mental Ledger for Target: ${targetInfo}...`);
     try {
+        const logs = await prisma.redSwarmLog.findMany({ where: { targetIp: targetInfo }, orderBy: { createdAt: 'asc' } });
+        const formattedLogs = logs.map(l => `[${l.agentName}] Cmd: ${l.executedCommand} | Success: ${l.isSuccess} | Out: ${(l.executionOutput || "No Output").substring(0, 500)}`).join('\n\n');
 
-        const logs = await prisma.redSwarmLog.findMany({
-            where: { targetIp: targetInfo },
-            orderBy: { createdAt: 'asc' }
-        });
+        const overlordPrompt = `You are 'The Overlord', the APT Commander. Target: ${targetInfo}
+        Mental Ledger:
+        ${formattedLogs || "No actions yet."}
 
-        const formattedLogs = logs.map(l =>
-            `[${l.agentName}] Task: ${l.assignedTask} | Command: ${l.executedCommand} | Success: ${l.isSuccess} | Output: ${l.executionOutput}`
-        ).join('\n\n');
-
-
-        const overlordPrompt = `You are 'The Overlord', the supreme Autonomous APT Commander of Project RedSwarm.
-        Target: ${targetInfo}
-        
-        Operation History (from Database):
-        ${formattedLogs || "No actions taken yet. This is the beginning of the campaign."}
-
-        YOUR DIRECTIVE:
-        1. Achieve MAXIMUM EXPLOITATION. You must reach the deepest point possible in the target environment.
-        2. Use ALL possible techniques, even if there is only a 1% chance of success. Do not stop at the first successful exploit; chain them, establish deep persistence, and prepare for lateral movement.
-        3. Analyze the history above. Identify what has failed and what has succeeded. 
-        4. If the target is fully compromised and all extreme avenues are exhausted, set "is_operation_complete" to true and call the 'Scribe' agent.
-        5. If not, decide the exact next agent to wake up and the precise instructions they must execute.
+        STRATEGIC DIRECTIVES:
+        1. If a major milestone is reached (e.g., Shell access, Root gained), IMMEDIATELY summon 'Scribe' to update the live report.
+        2. If an agent is detected or blocked by EDR/WAF, IMMEDIATELY summon 'Chameleon' with action 'CLEANUP' to wipe tracks.
+        3. If an exploit failed but a 1% chance exists, summon 'Chameleon' with action 'EVASION' to re-tune the payload.
+        4. If operation is complete, set "is_operation_complete" to true.
 
         Strictly return JSON:
         {
-            "global_analysis": "Your deep analysis of the current situation",
-            "is_operation_complete": boolean,
+            "global_analysis": "...",
+            "is_operation_complete": false,
             "next_agent": "Scout|Breacher|Phantom|Chameleon|Scribe",
-            "detailed_instructions": "Exact, aggressive instructions for the next agent based on the database logs"
+            "detailed_instructions": "..."
         }`;
 
-
         return await askRedSwarmAI(overlordPrompt, true);
-
-    } catch (error) {
-        console.error('[-] Overlord Agent error:', error.message);
-        return null;
-    }
+    } catch (error) { console.error('[-] Overlord Error:', error.message); return null; }
 };
 
 const runScribeAgent = async(targetInfo) => {
     console.log(`\n[📝] Scribe is pulling all data from the Database to generate the final report...`);
-
     try {
-        const logs = await prisma.redSwarmLog.findMany({
-            where: { targetIp: targetInfo },
-            orderBy: { createdAt: 'asc' }
-        });
-
-        const campaignHistory = logs.map(l =>
-            `Phase: ${l.agentName} | Action: ${l.assignedTask} | Result: ${l.isSuccess ? 'SUCCESS' : 'FAILED'} | Details: ${l.executionOutput}`
-        ).join('\n');
+        const logs = await prisma.redSwarmLog.findMany({ where: { targetIp: targetInfo }, orderBy: { createdAt: 'asc' } });
+        const campaignHistory = logs.map(l => `Phase: ${l.agentName} | Action: ${l.assignedTask} | Result: ${l.isSuccess ? 'SUCCESS' : 'FAILED'} | Details: ${l.executionOutput}`).join('\n');
 
         const scribePrompt = `You are 'Scribe', the elite reporting agent.
-        Write a highly professional Red Team Penetration Testing Report for Target: ${targetInfo}.
+        Write a highly professional Red Team Pentration Testing Report for Target: ${targetInfo}.
         
         Full Database Logs (Successes & Failures): 
         ${campaignHistory}
 
         Your report MUST include:
         1. Executive Summary.
-        2. Detailed Attack Chain (documenting every attempt, what failed, and what ultimately succeeded).
-        3. Vulnerabilities Discovered (with CWE/Severity).
+        2. Detailed Attack Chain.
+        3. Vulnerabilities Discovered.
         4. Remediation Steps.
         
         Format strictly in Professional Markdown.`;
 
-
         return await askRedSwarmAI(scribePrompt, false);
-
-    } catch (error) {
-        console.error('[-] Scribe Agent error:', error.message);
-        return null;
-    }
+    } catch (error) { console.error('[-] Scribe Error:', error.message); return null; }
 };
 
 const runActionAgent = async(alertContext, userCommand) => {
     console.log(`\n[🤖] Bayezid-Action summoned! Analyzing command: ${userCommand}`);
-
     try {
         const actionPrompt = `You are 'Bayezid-Action', the SOAR Execution Agent in a SOC War Room.
         Incident Context (Database Record): ${JSON.stringify(alertContext)}
@@ -590,30 +592,23 @@ const runActionAgent = async(alertContext, userCommand) => {
         1. Understand what the SOC Analyst wants to do from the command.
         2. Identify the target IP or entity.
         3. Determine the correct playbook to execute (e.g., BLOCK_IP, ISOLATE_HOST, CLOSE_PORT).
-        4. Draft a professional confirmation reply to the team in the exact same language they used (Arabic/Franco/English).
+        4. Draft a professional confirmation reply.
 
         Strictly return JSON:
         {
-            "understood_intent": "Brief summary of what you are about to do",
+            "understood_intent": "Brief summary",
             "recommended_playbook": "BLOCK_IP" | "ISOLATE_HOST" | "CUSTOM_ACTION",
-            "target_ip": "The IP address to block/isolate",
-            "agent_reply": "Your message to the chat confirming the action (e.g., 'Roger that. Blocking IP 192.168.1.5 now...')"
+            "target_ip": "The IP address",
+            "agent_reply": "Your message to the chat confirming the action"
         }`;
 
-
-        const decision = await askRedSwarmAI(actionPrompt, true);
-        return decision;
-
-    } catch (error) {
-        console.error('[-] Action Agent Error:', error.message);
-        return null;
-    }
+        return await askRedSwarmAI(actionPrompt, true);
+    } catch (error) { console.error('[-] Action Error:', error.message); return null; }
 };
 
 module.exports = {
     analyzeWithVertexAI,
     analyzeWithLocalModel,
-    orchestrateRedSwarm,
     runScoutAgent,
     runBreacherAgent,
     runPhantomAgent,
