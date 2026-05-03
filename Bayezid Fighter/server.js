@@ -5,7 +5,7 @@ const dotenv = require('dotenv');
 const { PrismaClient } = require('@prisma/client');
 const path = require('path');
 const { processTuningCommand, liveConfig } = require('./tuningService');
-const { analyzeWithVertexAI, analyzeWithLocalModel, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent, runActionAgent } = require('./aiService');
+const { analyzeWithVertexAI, analyzeWithLocalModel, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent, runActionAgent, bridgeRedToBlue, applyFixAndVerify } = require('./aiService');
 const { executePlaybook } = require('./playbookService');
 const { enrichWithOSINT } = require('./osintService');
 const { sendTelegramAlert } = require('./notificationService');
@@ -608,6 +608,25 @@ app.post('/api/v1/redswarm/auto-pilot', async(req, res) => {
     })();
 });
 
+app.post('/api/v1/bridge/report-vuln', async(req, res) => {
+    const { vulnName, severity, detectedBy, targetIp, evidence } = req.body;
+    const vuln = await prisma.vulnerabilityBridge.create({
+        data: { vulnName, severity, detectedBy, targetIp, evidence }
+    });
+    res.json({ status: "success", message: "Vulnerability recorded.", vulnId: vuln.id });
+});
+
+app.post('/api/v1/bridge/analyze', async(req, res) => {
+    const { vulnId } = req.body;
+    const fixSuggestion = await bridgeRedToBlue(vulnId);
+    res.json({ status: "success", data: fixSuggestion });
+});
+
+app.post('/api/v1/bridge/approve-fix', async(req, res) => {
+    const { vulnId, userInstructions } = req.body;
+    const result = await applyFixAndVerify(vulnId, userInstructions);
+    res.json({ status: "success", message: "Fix applied and regression testing complete.", data: result });
+});
 
 const startEscalationWatcher = () => {
     setInterval(async() => {
@@ -644,7 +663,7 @@ const startEscalationWatcher = () => {
         } catch (error) {
             console.error('[-] Escalation Watcher Error:', error.message);
         }
-    }, 60 * 1000); // 1 minute interval
+    }, 60 * 1000);
 };
 
 

@@ -91,3 +91,17 @@ model IncidentChat {
   
   alert     Alert    @relation(fields: [alertId], references: [id])
 }
+
+model VulnerabilityBridge {
+  id                String   @id @default(uuid())
+  vulnName          String
+  severity          String
+  detectedBy        String
+  targetIp          String
+  evidence          String
+  fixType           String?  
+  suggestedFix      String?
+  status            String   @default("PENDING_REVIEW")
+  userComments      String?
+  createdAt         DateTime @default(now())
+}

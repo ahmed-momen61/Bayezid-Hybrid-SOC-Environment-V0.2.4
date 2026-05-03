@@ -14,7 +14,6 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-// --- THE SMART EXECUTION ENGINE ---
 const smartExec = async(command, timeoutMs, isBackground) => {
     if (isBackground) {
         const logFile = path.join(__dirname, `job_${Date.now()}.log`);
@@ -48,7 +47,6 @@ const smartExec = async(command, timeoutMs, isBackground) => {
     }
 };
 
-// --- SHARED MEMORY SYSTEM: Let agents learn from each other ---
 const getSharedMemory = async(targetIp) => {
     try {
         const logs = await prisma.redSwarmLog.findMany({
@@ -288,8 +286,15 @@ const askRedSwarmAI = async(prompt, requireJson = true) => {
         const response = await model.generateContent(prompt);
         let text = response.response.text();
 
-        // تنظيف الـ Markdown لو موجود عشان ميعملش Crash
         if (requireJson) {
+            text = text.replace(/\\n/g, "\\n")
+                .replace(/\\'/g, "\\'")
+                .replace(/\\"/g, '\\"')
+                .replace(/\\&/g, "\\&")
+                .replace(/\\r/g, "\\r")
+                .replace(/\\t/g, "\\t")
+                .replace(/\\b/g, "\\b")
+                .replace(/\\f/g, "\\f");
             text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
             return JSON.parse(text);
         }
@@ -309,8 +314,8 @@ const askRedSwarmAI = async(prompt, requireJson = true) => {
 
             let text = localResponse.data.response;
 
-            // تنظيف الـ Markdown للوكال برضه
             if (requireJson) {
+                text = text.replace(/\\n/g, "\\n").replace(/\\'/g, "\\'").replace(/\\"/g, '\\"');
                 text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
                 return JSON.parse(text);
             }
@@ -606,6 +611,95 @@ const runActionAgent = async(alertContext, userCommand) => {
     } catch (error) { console.error('[-] Action Error:', error.message); return null; }
 };
 
+const bridgeRedToBlue = async(vulnId) => {
+    console.log(`\n[🛡️] Blue Side (Detective) analyzing vulnerability ID: ${vulnId}`);
+    try {
+        const vuln = await prisma.vulnerabilityBridge.findUnique({ where: { id: vulnId } });
+        if (!vuln) throw new Error("Vulnerability not found.");
+
+        const bluePrompt = `You are the 'Remediation Engineer'. 
+        The Red Team compromised: ${vuln.vulnName} 
+        Evidence: ${vuln.evidence}
+
+        STRICT DIRECTIVE:
+        You are NOT simulating. You are APPLYING A FIX. 
+        1. If it's a Code Patch: Provide a 'remediation_code' using 'sed' or 'awk' to find and replace the vulnerable line in the source file, OR a 'Virtual Patch' using iptables/WAF rules.
+        2. You MUST provide a valid, executable shell command. DO NOT leave 'remediation_code' empty.
+        3. If you don't know the exact file path, assume standard Linux/Windows paths or PROVIDE A BLOCKING RULE (like iptables drop) as a fallback.
+
+        Return strictly JSON:
+        {
+            "impact_analysis": "...",
+            "fix_classification": "Configuration" | "Code Patch",
+            "step_by_step_fix": "...",
+            "remediation_code": "exact_bash_command_to_run_like_iptables_or_sed", 
+            "is_virtual_patch": true
+        }`;
+
+        const fixSuggestion = await askRedSwarmAI(bluePrompt, true);
+
+        await prisma.vulnerabilityBridge.update({
+            where: { id: vulnId },
+            data: {
+                fixType: fixSuggestion.fix_classification,
+                suggestedFix: JSON.stringify(fixSuggestion)
+            }
+        });
+
+        console.log(`[🛡️] Analysis complete. Fix classified as: ${fixSuggestion.fix_classification}`);
+        return fixSuggestion;
+    } catch (error) { console.error('[-] Bridge Error:', error.message); return null; }
+};
+
+const applyFixAndVerify = async(vulnId, userInstructions) => {
+    console.log(`\n[🛠️] Action Agent applying fix for vulnerability ID: ${vulnId}`);
+    try {
+        const vuln = await prisma.vulnerabilityBridge.findUnique({ where: { id: vulnId } });
+        const fixData = JSON.parse(vuln.suggestedFix);
+
+        let patchOutput = "";
+        try {
+            console.log(`[⚙️] Executing Remediation: ${fixData.remediation_code}`);
+            const { stdout, stderr } = await smartExec(fixData.remediation_code, 60000, false);
+            patchOutput = stdout || stderr || "Executed successfully with no output.";
+        } catch (err) { patchOutput = err.message; }
+
+        await prisma.vulnerabilityBridge.update({
+            where: { id: vulnId },
+            data: { status: "FIXED", userComments: userInstructions }
+        });
+
+        console.log(`\n[🔄] Regression Testing: Breacher is re-testing the exploit...`);
+        const verifyPrompt = `You are 'Breacher'. We just patched: ${vuln.vulnName} on ${vuln.targetIp}.
+        Original Payload that succeeded: ${vuln.evidence}
+        
+        Task: Formulate the exact command to re-test the vulnerability and ensure the patch works.
+        Strictly return JSON: { "best_command": "...", "estimated_timeout_ms": 30000, "run_in_background": false }`;
+
+        const verifyCommand = await askRedSwarmAI(verifyPrompt, true);
+        let testOutput = "";
+        try {
+            const { stdout, stderr } = await smartExec(verifyCommand.best_command, verifyCommand.estimated_timeout_ms || 30000, verifyCommand.run_in_background);
+            testOutput = stdout || stderr || "No output.";
+        } catch (err) { testOutput = err.message; }
+
+        const evalPrompt = `Evaluate this re-test output. The exploit should FAIL if the patch worked. 
+        Output: ${testOutput}
+        Return JSON: { "is_vulnerable": boolean, "reason": "..." }`;
+        const evalResult = await askRedSwarmAI(evalPrompt, true);
+
+        if (!evalResult.is_vulnerable) {
+            await prisma.vulnerabilityBridge.update({ where: { id: vulnId }, data: { status: "VERIFIED_SAFE" } });
+            console.log(`[✅] Verification passed! The fix is 100% solid.`);
+        } else {
+            await prisma.vulnerabilityBridge.update({ where: { id: vulnId }, data: { status: "FIX_FAILED" } });
+            console.log(`[❌] Verification failed! Vulnerability still exists.`);
+        }
+
+        return { patchOutput, verificationResult: evalResult };
+    } catch (error) { console.error('[-] Fix & Verify Error:', error.message); return null; }
+};
+
 module.exports = {
     analyzeWithVertexAI,
     analyzeWithLocalModel,
@@ -615,5 +709,7 @@ module.exports = {
     runChameleonAgent,
     runOverlordAgent,
     runScribeAgent,
-    runActionAgent
+    runActionAgent,
+    bridgeRedToBlue,
+    applyFixAndVerify
 };
