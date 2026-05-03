@@ -129,6 +129,7 @@ OPENCTI_TOKEN="your_opencti_token_here"
 
 SLA_TIMEOUT_MINUTES=5
 ```
+---
 NOTE : you can check the Test showcases for the blue and red sides, please download the RAR file 
 ---
 
