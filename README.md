@@ -107,21 +107,27 @@ node server.js
 
 ## Environment Variables (.env)
 ```env
-# Infrastructure
-DATABASE_URL="postgresql://user:pass@host:6543/postgres?pgvector=true"
+
 PORT=3000
+DATABASE_URL="postgresql://<USER>:<PASSWORD>@<HOST>:<PORT>/<DATABASE>"
+DIRECT_URL="postgresql://<USER>:<PASSWORD>@<HOST>:<PORT>/<DATABASE>"
 
-# Cognitive Keys
-GOOGLE_API_KEY="AIza..."
+AI_MODE=CLOUD
+GEMINI_API_KEY="AIzaSy_YOUR_GEMINI_API_KEY_HERE"
+GOOGLE_API_KEY="AIzaSy_YOUR_GOOGLE_API_KEY_HERE"
 LOCAL_MODEL_NAME="qwen2.5-coder:7b"
+OLLAMA_BASE_URL="http://localhost:11434"
 
-# Security & Intel
-ENCRYPTION_KEY="your_32_byte_hex_key"
-OTX_API_KEY="your_otx_api_key"
+TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN_HERE"
+TELEGRAM_CHAT_ID="YOUR_TELEGRAM_CHAT_ID_HERE"
 
-# Tuning
-SLA_TIMEOUT_MINUTES=10
-AUTO_BLOCK_CONFIDENCE=90
+ENCRYPTION_KEY="your_64_character_hex_string_here"
+ENCRYPTION_IV="your_32_character_hex_string_here"
+OTX_API_KEY="your_alienvault_otx_api_key_here"
+OPENCTI_URL="https://your-opencti-instance-url"
+OPENCTI_TOKEN="your_opencti_token_here"
+
+SLA_TIMEOUT_MINUTES=5
 ```
 NOTE : you can check the Test showcases for the blue and red sides, please download the RAR file 
 ---
