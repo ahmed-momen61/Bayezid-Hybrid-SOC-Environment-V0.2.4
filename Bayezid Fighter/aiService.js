@@ -1,4 +1,5 @@
 const axios = require('axios');
+const itsmService = require('./itsmService');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { enrichContext } = require('./ragService');
 require('dotenv').config();
@@ -76,17 +77,18 @@ const deepSanitize = (obj) => {
 };
 
 const analyzeWithVertexAI = async(alertData) => {
-    console.log('\n[☁️] Sending Data to Cloud AI (Google Gemini 1.5 Flash)...');
+    console.log('\n[☁️] Sending Data to Cloud AI (Waterfall Fallback Mode)...');
 
     try {
         const safeDataString = typeof alertData === 'string' ? alertData : JSON.stringify(alertData);
         const injectedContext = await enrichContext(safeDataString);
 
-        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-        const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash",
-            generationConfig: { responseMimeType: "application/json" }
-        });
+        const cloudModels = [
+            "gemini-3.1-pro-preview",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash"
+        ];
 
         const systemPrompt = `You are an Elite Cloud-Based Cybersecurity SIEM Correlation Engine.
         
@@ -123,25 +125,41 @@ const analyzeWithVertexAI = async(alertData) => {
             "recommended_action": "Specific technical response."
         }`;
 
-        const result = await model.generateContent(`${systemPrompt}\n\nAnalyze this data: ${safeDataString}`);
-        const text = result.response.text();
+        let aiResponse = null;
+        let successfulModel = "";
 
-        let aiResponse = JSON.parse(text);
+        for (const modelName of cloudModels) {
+            try {
+                const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+                const model = genAI.getGenerativeModel({
+                    model: modelName,
+                    generationConfig: { responseMimeType: "application/json" }
+                });
+
+                const result = await model.generateContent(`${systemPrompt}\n\nAnalyze this data: ${safeDataString}`);
+                const text = result.response.text();
+
+                aiResponse = JSON.parse(text);
+                successfulModel = modelName;
+                break;
+            } catch (err) {
+                console.warn(`[⚠️] Cloud Model (${modelName}) Failed: ${err.message}. Switching to next...`);
+                continue;
+            }
+        }
+
+        if (!aiResponse) throw new Error("All cloud models exhausted.");
+
         aiResponse = deepSanitize(aiResponse);
 
         return {
             ...aiResponse,
-            engine_used: 'Google Gemini 1.5 Flash + Hybrid RAG (Cloud ☁️)'
+            engine_used: `Google ${successfulModel} + Hybrid RAG (Cloud ☁️)`
         };
 
     } catch (error) {
-        console.error('[-] Cloud AI Error:', error.message);
-        return {
-            severity: 'HIGH',
-            threat_type: 'Cloud Offline Fallback',
-            recommended_action: 'Manual Investigation Required',
-            engine_used: 'Fail-safe (Cloud Error)'
-        };
+        console.error('[-] Cloud AI Error (All Models Failed):', error.message);
+        return { severity: 'HIGH', threat_type: 'Cloud Offline Fallback', recommended_action: 'Manual Investigation Required', engine_used: 'Fail-safe (Cloud Error)' };
     }
 };
 
@@ -276,55 +294,60 @@ const orchestrateRedSwarm = async(targetInfo, currentState) => {
 };
 
 const askRedSwarmAI = async(prompt, requireJson = true) => {
-    try {
-        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-        const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash",
-            generationConfig: requireJson ? { responseMimeType: "application/json" } : {}
-        });
+    const cloudModels = [
+        "gemini-3.1-pro-preview",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash"
+    ];
 
-        const response = await model.generateContent(prompt);
-        let text = response.response.text();
-
-        if (requireJson) {
-            text = text.replace(/\\n/g, "\\n")
-                .replace(/\\'/g, "\\'")
-                .replace(/\\"/g, '\\"')
-                .replace(/\\&/g, "\\&")
-                .replace(/\\r/g, "\\r")
-                .replace(/\\t/g, "\\t")
-                .replace(/\\b/g, "\\b")
-                .replace(/\\f/g, "\\f");
-            text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
-            return JSON.parse(text);
-        }
-        return text;
-
-    } catch (cloudError) {
-        console.warn(`\n[⚠️] Gemini Cloud Failed: ${cloudError.message}`);
-        console.log(`[🔄] Initiating Fallback to Local AI (Ollama/Qwen)...`);
-
+    for (const modelName of cloudModels) {
         try {
-            const localResponse = await axios.post('http://localhost:11434/api/generate', {
-                model: process.env.LOCAL_MODEL_NAME || "qwen2.5-coder:7b",
-                prompt: prompt + (requireJson ? "\n\nCRITICAL: You MUST return ONLY valid JSON formatting without markdown blocks." : ""),
-                stream: false,
-                format: requireJson ? "json" : ""
+            const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+            const model = genAI.getGenerativeModel({
+                model: modelName,
+                generationConfig: requireJson ? { responseMimeType: "application/json" } : {}
             });
 
-            let text = localResponse.data.response;
+            const response = await model.generateContent(prompt);
+            let text = response.response.text();
 
             if (requireJson) {
-                text = text.replace(/\\n/g, "\\n").replace(/\\'/g, "\\'").replace(/\\"/g, '\\"');
+                text = text.replace(/\\n/g, "\\n").replace(/\\'/g, "\\'").replace(/\\"/g, '\\"').replace(/\\&/g, "\\&").replace(/\\r/g, "\\r").replace(/\\t/g, "\\t").replace(/\\b/g, "\\b").replace(/\\f/g, "\\f");
                 text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
                 return JSON.parse(text);
             }
             return text;
 
-        } catch (localError) {
-            console.error(`[❌] Local AI also failed. System is blind: ${localError.message}`);
-            throw new Error("Both Cloud and Local AI Engines failed.");
+        } catch (cloudError) {
+            console.warn(`[⚠️] Cloud Model (${modelName}) Failed: ${cloudError.message}. Switching to next...`);
+            continue;
         }
+    }
+
+    console.log(`\n[🚨] ALL Cloud Models Exhausted!`);
+    console.log(`[🔄] Initiating Last Resort Fallback to Local AI (Ollama/Qwen)...`);
+
+    try {
+        const localResponse = await axios.post('http://localhost:11434/api/generate', {
+            model: process.env.LOCAL_MODEL_NAME || "qwen2.5-coder:7b",
+            prompt: prompt + (requireJson ? "\n\nCRITICAL: You MUST return ONLY valid JSON formatting without markdown blocks." : ""),
+            stream: false,
+            format: requireJson ? "json" : ""
+        });
+
+        let text = localResponse.data.response;
+
+        if (requireJson) {
+            text = text.replace(/\\n/g, "\\n").replace(/\\'/g, "\\'").replace(/\\"/g, '\\"');
+            text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
+            return JSON.parse(text);
+        }
+        return text;
+
+    } catch (localError) {
+        console.error(`[❌] Local AI also failed. System is blind: ${localError.message}`);
+        throw new Error("Both Cloud and Local AI Engines failed.");
     }
 };
 
@@ -647,6 +670,24 @@ const bridgeRedToBlue = async(vulnId) => {
         });
 
         console.log(`[🛡️] Analysis complete. Fix classified as: ${fixSuggestion.fix_classification}`);
+
+        const config = await prisma.systemConfig.findUnique({ where: { id: "BAYEZID_CORE_CONFIG" } });
+        const autonomyMode = config ? config.autonomyMode : "SNIPER";
+
+        if (autonomyMode === "OVERLORD") {
+            console.log(`\n[👑] OVERLORD MODE ACTIVE: Skipping human approval!`);
+            console.log(`[👑] Executing autonomous fix for ${vuln.vulnName}...`);
+
+            applyFixAndVerify(vulnId, "Autonomously Approved & Executed by Overlord AI").then(result => {
+                console.log(`\n[👑] Overlord sequence complete for ID: ${vulnId}`);
+            }).catch(err => console.error("Overlord Execution Error:", err));
+
+            fixSuggestion.autonomy_status = "OVERLORD_TRIGGERED: Fix is being applied autonomously in the background.";
+        } else {
+            console.log(`\n[🎯] SNIPER MODE ACTIVE: Fix prepared. Waiting for human approval via dashboard/Postman.`);
+            fixSuggestion.autonomy_status = "SNIPER_WAITING: Pending human approval.";
+        }
+
         return fixSuggestion;
     } catch (error) { console.error('[-] Bridge Error:', error.message); return null; }
 };
@@ -691,6 +732,11 @@ const applyFixAndVerify = async(vulnId, userInstructions) => {
         if (!evalResult.is_vulnerable) {
             await prisma.vulnerabilityBridge.update({ where: { id: vulnId }, data: { status: "VERIFIED_SAFE" } });
             console.log(`[✅] Verification passed! The fix is 100% solid.`);
+            if (vuln.ticketId) {
+                await itsmService.closeTicket(vuln.ticketId, vuln.suggestedFix);
+            }
+            const complianceReport = await runAuditorAgent(vuln.vulnName, vuln.suggestedFix);
+            console.log(`[🎫] ITSM Updated with Compliance Note.`);
         } else {
             await prisma.vulnerabilityBridge.update({ where: { id: vulnId }, data: { status: "FIX_FAILED" } });
             console.log(`[❌] Verification failed! Vulnerability still exists.`);
@@ -698,6 +744,29 @@ const applyFixAndVerify = async(vulnId, userInstructions) => {
 
         return { patchOutput, verificationResult: evalResult };
     } catch (error) { console.error('[-] Fix & Verify Error:', error.message); return null; }
+};
+
+const runAuditorAgent = async(vulnName, remediationCode) => {
+    console.log(`[📜] Auditor Agent checking compliance for: ${vulnName}...`);
+
+    const prompt = `
+    You are an expert Cybersecurity Compliance Auditor.
+    A vulnerability "${vulnName}" was just fixed using the following remediation code:
+    \`\`\`
+    ${remediationCode}
+    \`\`\`
+    Briefly state in exactly 1 or 2 sentences which compliance standards (e.g., PCI-DSS, ISO 27001, NIST CSF, GDPR) are satisfied or maintained by applying this fix. Be direct and professional.
+    `;
+
+    try {
+        const response = await askRedSwarmAI(prompt, false);
+        console.log(`\n[⚖️] COMPLIANCE REPORT:`);
+        console.log(`\x1b[33m${response}\x1b[0m`);
+        return response;
+    } catch (error) {
+        console.error("[!] Auditor Agent Error:", error);
+        return "Compliance check failed.";
+    }
 };
 
 module.exports = {

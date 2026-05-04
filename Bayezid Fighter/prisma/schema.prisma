@@ -21,7 +21,6 @@ model Alert {
   severity           String?
   threatType         String?
   recommendedAction  String?
-  
   status             String   @default("NEW")
   
   confidenceType     String   @default("PROBABILISTIC")
@@ -34,14 +33,13 @@ model Alert {
   killChainPhase     String?
   predictedSteps     String?
   businessContinuity String?
-  osintData          Json?    
-  
+  osintData          Json?
   messages           ChatMessage[]
   
   createdAt          DateTime @default(now())
-  chats     IncidentChat[]
+  chats              IncidentChat[]
   playbookDetails    String?
-  embedding Unsupported("vector(3072)")?
+  embedding          Unsupported("vector(3072)")?
 }
 
 model Playbook {
@@ -59,7 +57,7 @@ model RedSwarmLog {
   assignedTask    String   @db.Text
   executedCommand String?  @db.Text
   executionOutput String?  @db.Text 
-  isSuccess       Boolean? 
+  isSuccess       Boolean?
   createdAt       DateTime @default(now())
 }
 
@@ -73,13 +71,6 @@ model ChatMessage {
   alert     Alert    @relation(fields: [alertId], references: [id], onDelete: Cascade)
   
   createdAt DateTime @default(now())
-}
-
-model SystemConfig {
-  id        String   @id @default("current") 
-  key       String   @unique
-  value     String
-  updatedAt DateTime @updatedAt
 }
 
 model IncidentChat {
@@ -99,9 +90,49 @@ model VulnerabilityBridge {
   detectedBy        String
   targetIp          String
   evidence          String
-  fixType           String?  
+  fixType           String?
   suggestedFix      String?
   status            String   @default("PENDING_REVIEW")
   userComments      String?
+  ticketId          String?
   createdAt         DateTime @default(now())
+}
+
+model User {
+  id             String   @id @default(uuid())
+  username       String   @unique
+  role           String   @default("JUNIOR_ANALYST") // JUNIOR_ANALYST, SENIOR_ANALYST, ADMIN
+  trustScore     Int      @default(50)               // من 0 لـ 100، بيزيد ويقل حسب قراراته
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model EvidenceVault {
+  id             String   @id @default(uuid())
+  incidentId     String   // مربوط بالـ Alert أو الـ Vulnerability
+  evidenceType   String   // PAYLOAD, LOG, PCAP, SCREENSHOT
+  encryptedData  String   // الداتا متشفره بـ AES-256
+  iv             String   // الـ Initialization Vector لفك التشفير
+  sha256Hash     String   @unique // البصمة الرقمية لضمان عدم التلاعب
+  collectedBy    String   // اسم الـ Agent اللي جاب الدليل (مثلاً Detective)
+  timestamp      DateTime @default(now())
+}
+
+model SystemConfig {
+  id                    String   @id @default(uuid())
+  key                   String   @unique
+  value                 String
+  autonomyMode          String   @default("SNIPER")
+  emergencyTtlMinutes   Int      @default(5)
+  dualRedTeamMode       String   @default("MODE_A")
+  updatedAt             DateTime @updatedAt
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  userId         String?
+  action         String
+  aiVetoTriggered Boolean @default(false)
+  aiReasoning    String?
+  timestamp      DateTime @default(now())
 }

@@ -12,8 +12,27 @@ const { sendTelegramAlert } = require('./notificationService');
 const { loadMitreDatabase } = require('./ragService');
 const { enrichWithCTI } = require('./ctiService');
 const { findSimilarIncidents, saveIncidentToMemory } = require('./memoryService');
+const crypto = require('crypto');
+const itsmService = require('./itsmService');
 
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
+const IV_LENGTH = 16;
 
+function encryptEvidence(text) {
+    let iv = crypto.randomBytes(IV_LENGTH);
+    let keyBuffer = Buffer.from(ENCRYPTION_KEY, 'hex');
+    if (keyBuffer.length !== 32) {
+        keyBuffer = crypto.createHash('sha256').update(String(ENCRYPTION_KEY)).digest();
+    }
+    let cipher = crypto.createCipheriv('aes-256-cbc', keyBuffer, iv);
+    let encrypted = cipher.update(text);
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    return { iv: iv.toString('hex'), encryptedData: encrypted.toString('hex') };
+}
+
+function hashEvidence(text) {
+    return crypto.createHash('sha256').update(text).digest('hex');
+}
 
 dotenv.config();
 
@@ -610,10 +629,44 @@ app.post('/api/v1/redswarm/auto-pilot', async(req, res) => {
 
 app.post('/api/v1/bridge/report-vuln', async(req, res) => {
     const { vulnName, severity, detectedBy, targetIp, evidence } = req.body;
-    const vuln = await prisma.vulnerabilityBridge.create({
-        data: { vulnName, severity, detectedBy, targetIp, evidence }
-    });
-    res.json({ status: "success", message: "Vulnerability recorded.", vulnId: vuln.id });
+    try {
+        const ticketId = await itsmService.createTicket(vulnName, severity, targetIp);
+
+        const vuln = await prisma.vulnerabilityBridge.create({
+            data: { vulnName, severity, detectedBy, targetIp, evidence, ticketId }
+        });
+
+        const { iv, encryptedData } = encryptEvidence(evidence);
+        const sha256Hash = hashEvidence(evidence + Date.now().toString());
+
+        await prisma.evidenceVault.create({
+            data: { incidentId: vuln.id, evidenceType: "PAYLOAD", encryptedData, iv, sha256Hash, collectedBy: detectedBy || "System" }
+        });
+
+        console.log(`[🚨] Red Team reported: ${vulnName} (${severity})`);
+        console.log(`[🔐] Evidence Encrypted & Stored in Vault.`);
+
+        res.json({ status: "success", vulnId: vuln.id, ticketId: ticketId, message: "Vulnerability reported & Ticket Created." });
+    } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post('/api/v1/users/seed', async(req, res) => {
+    try {
+        const junior = await prisma.user.upsert({
+            where: { username: "ahmed_junior" },
+            update: {},
+            create: { username: "ahmed_junior", role: "JUNIOR_ANALYST", trustScore: 50 }
+        });
+        const senior = await prisma.user.upsert({
+            where: { username: "momen_senior" },
+            update: {},
+            create: { username: "momen_senior", role: "SENIOR_ANALYST", trustScore: 90 }
+        });
+        console.log("[👥] Test users seeded successfully.");
+        res.json({ status: "success", junior, senior });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 app.post('/api/v1/bridge/analyze', async(req, res) => {
@@ -623,9 +676,59 @@ app.post('/api/v1/bridge/analyze', async(req, res) => {
 });
 
 app.post('/api/v1/bridge/approve-fix', async(req, res) => {
-    const { vulnId, userInstructions } = req.body;
-    const result = await applyFixAndVerify(vulnId, userInstructions);
-    res.json({ status: "success", message: "Fix applied and regression testing complete.", data: result });
+    const { vulnId, userId } = req.body;
+
+    try {
+        const vuln = await prisma.vulnerabilityBridge.findUnique({ where: { id: vulnId } });
+        if (!vuln) return res.status(404).json({ error: "Vulnerability not found" });
+
+        if (userId) {
+            const user = await prisma.user.findUnique({ where: { id: userId } });
+            if (user) {
+                if (user.role === "JUNIOR_ANALYST" && (vuln.severity === "CRITICAL" || vuln.severity === "HIGH")) {
+                    console.log(`\n[🛑] AI VETO TRIGGERED: User '${user.username}' (JUNIOR) attempted to approve a ${vuln.severity} fix!`);
+
+                    await prisma.auditLog.create({
+                        data: {
+                            userId: user.id,
+                            action: "APPROVE_FIX_ATTEMPT",
+                            aiVetoTriggered: true,
+                            aiReasoning: "Junior analysts cannot approve HIGH/CRITICAL fixes without Senior oversight."
+                        }
+                    });
+
+                    const updatedUser = await prisma.user.update({
+                        where: { id: user.id },
+                        data: { trustScore: Math.max(0, user.trustScore - 5) }
+                    });
+
+                    return res.status(403).json({
+                        status: "blocked",
+                        message: "AI VETO: This fix requires SENIOR_ANALYST approval due to high risk.",
+                        trustScore: updatedUser.trustScore
+                    });
+                }
+
+                console.log(`\n[✅] Approval accepted from '${user.username}' (${user.role}).`);
+                await prisma.user.update({
+                    where: { id: user.id },
+                    data: { trustScore: Math.min(100, user.trustScore + 2) }
+                });
+            }
+        }
+
+        await prisma.vulnerabilityBridge.update({
+            where: { id: vulnId },
+            data: { status: "APPROVED" }
+        });
+
+        const aiService = require('./aiService');
+        aiService.applyFixAndVerify(vulnId, "Human Approved");
+
+        res.json({ status: "success", message: "Fix approved and is being applied." });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 const startEscalationWatcher = () => {
@@ -681,6 +784,30 @@ app.post('/api/v1/system/tune', async(req, res) => {
         current_config: liveConfig,
         message: result.reply
     });
+});
+
+
+app.post('/api/v1/config/set-autonomy', async(req, res) => {
+    const { mode } = req.body;
+
+    try {
+        const config = await prisma.systemConfig.upsert({
+            where: { id: "BAYEZID_CORE_CONFIG" },
+            update: { autonomyMode: mode },
+            create: {
+                id: "BAYEZID_CORE_CONFIG",
+                autonomyMode: mode,
+                emergencyTtlMinutes: 5,
+                dualRedTeamMode: "MODE_A",
+                key: "CORE_AUTONOMY",
+                value: mode
+            }
+        });
+        console.log(`\n[⚙️] System Autonomy Level changed to: ${mode}`);
+        res.json({ status: "success", message: `Autonomy Mode set to ${mode}`, config });
+    } catch (error) {
+        res.status(500).json({ status: "error", message: error.message });
+    }
 });
 
 const PORT = process.env.PORT || 3000;
