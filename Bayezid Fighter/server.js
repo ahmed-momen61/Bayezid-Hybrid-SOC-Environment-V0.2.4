@@ -908,36 +908,63 @@ rl.question('\nEnter your choice (1 or 2): ', (answer) => {
         rl.question("Enter mode (A or B): ", (modeChoice) => {
             const isStealth = modeChoice.trim().toUpperCase() === 'B';
             console.log(`\n[+] RED TEAM Activated in ${isStealth ? 'STEALTH (Mode B)' : 'AUTO-MITIGATE (Mode A)'}`);
-            rl.close();
 
-            startBayezidServer();
+            rl.question("\n[🎯] Enter Target IP or Domain to scan: ", (targetIpInput) => {
+                const targetIp = targetIpInput.trim() || "10.0.0.99";
+                rl.close();
 
-            const mockVuln = {
-                vulnName: "Server-Side Request Forgery (SSRF)",
-                severity: "CRITICAL",
-                detectedBy: "Phantom Agent",
-                targetIp: "10.0.0.99",
-                evidence: "GET /api/fetch?url=http://169.254.169.254/latest/meta-data/"
-            };
+                startBayezidServer();
 
-            setTimeout(async() => {
-                if (isStealth) {
-                    const { runStealthScribeAgent } = require('./aiService');
-                    await runStealthScribeAgent(mockVuln);
-                    console.log("\n[+] Stealth Pentest Complete. Check the report above.");
-                } else {
-                    console.log("\n[🌉] Forwarding to Blue Team Bridge...");
-                    const axios = require('axios');
+                setTimeout(async() => {
+                    console.log(`\n[⚔️] Initializing RedSwarm Agents for Live Target Scan on ${targetIp}...`);
+
                     try {
-                        const res = await axios.post(`http://localhost:${PORT}/api/v1/bridge/report-vuln`, mockVuln);
-                        console.log(`[✔] Handover complete! Ticket ID: ${res.data.ticketId}`);
-                        console.log(`[🛡️] Awakening Overlord Agent for autonomous defense...`);
-                        await axios.post(`http://localhost:${PORT}/api/v1/bridge/analyze`, { vulnId: res.data.vulnId });
-                    } catch (err) {
-                        console.log("[-] Red Team Bridge Error:", err.message);
+                        const { runScoutAgent, runBreacherAgent, runStealthScribeAgent } = require('./aiService');
+                        const axios = require('axios');
+
+                        console.log(`\n[🔍] Scout Agent is scanning the target...`);
+                        const scoutData = await runScoutAgent(targetIp, "Perform a comprehensive vulnerability scan.");
+
+                        if (!scoutData || !scoutData.scan_results) {
+                            console.log("[-] Recon finished. No open ports or critical vulnerabilities found.");
+                            process.exit(0);
+                        }
+
+                        console.log(`\n[⚔️] Breacher Agent is analyzing scan results and attempting exploit...`);
+                        const breachData = await runBreacherAgent(targetIp, scoutData.scan_results, "Focus on RCE, LFI, SSRF, or SQLi.");
+
+                        if (!breachData || !breachData.best_payload) {
+                            console.log("[-] Breacher could not find a viable exploit path.");
+                            process.exit(0);
+                        }
+
+                        const realVuln = {
+                            vulnName: breachData.threat_type || "Unknown Critical Vulnerability",
+                            severity: "CRITICAL",
+                            detectedBy: "RedSwarm Breacher Agent",
+                            targetIp: targetIp,
+                            evidence: breachData.best_payload
+                        };
+
+                        console.log(`\n[🚨] Real Threat Detected: ${realVuln.vulnName}`);
+
+                        if (isStealth) {
+                            console.log(`\n[🥷] Stealth Mode Active. Bypassing Blue Team and generating report...`);
+                            await runStealthScribeAgent(realVuln);
+                            console.log("\n[+] Stealth Pentest Complete. Check the report above.");
+                        } else {
+                            console.log("\n[🌉] Forwarding Live Threat to Blue Team Bridge...");
+                            const res = await axios.post(`http://localhost:${PORT}/api/v1/bridge/report-vuln`, realVuln);
+                            console.log(`[✔] Handover complete! Ticket ID: ${res.data.ticketId}`);
+                            console.log(`[🛡️] Awakening Overlord Agent for autonomous defense...`);
+                            await axios.post(`http://localhost:${PORT}/api/v1/bridge/analyze`, { vulnId: res.data.vulnId });
+                        }
+
+                    } catch (error) {
+                        console.error("[-] Attack Execution Failed:", error.message);
                     }
-                }
-            }, 2000);
+                }, 2000);
+            });
         });
     } else {
         global.BAYEZID_MODE = 'BLUE';
