@@ -901,13 +901,50 @@ console.log(`[2] ⚔️  RED TEAM (Offensive AI Pentesting)`);
 rl.question('\nEnter your choice (1 or 2): ', (answer) => {
     if (answer.trim() === '2') {
         global.BAYEZID_MODE = 'RED';
+        console.log("\n[⚔️ RED TEAM] Select Tactical Mode:");
+        console.log("[A] 🔁 Auto-Mitigate (Attack -> Send to Blue Team -> Verify)");
+        console.log("[B] 🥷 Stealth Pentest (Attack -> Generate Report -> No Patching)\n");
+
+        rl.question("Enter mode (A or B): ", (modeChoice) => {
+            const isStealth = modeChoice.trim().toUpperCase() === 'B';
+            console.log(`\n[+] RED TEAM Activated in ${isStealth ? 'STEALTH (Mode B)' : 'AUTO-MITIGATE (Mode A)'}`);
+            rl.close();
+
+            startBayezidServer();
+
+            const mockVuln = {
+                vulnName: "Server-Side Request Forgery (SSRF)",
+                severity: "CRITICAL",
+                detectedBy: "Phantom Agent",
+                targetIp: "10.0.0.99",
+                evidence: "GET /api/fetch?url=http://169.254.169.254/latest/meta-data/"
+            };
+
+            setTimeout(async() => {
+                if (isStealth) {
+                    const { runStealthScribeAgent } = require('./aiService');
+                    await runStealthScribeAgent(mockVuln);
+                    console.log("\n[+] Stealth Pentest Complete. Check the report above.");
+                } else {
+                    console.log("\n[🌉] Forwarding to Blue Team Bridge...");
+                    const axios = require('axios');
+                    try {
+                        const res = await axios.post(`http://localhost:${PORT}/api/v1/bridge/report-vuln`, mockVuln);
+                        console.log(`[✔] Handover complete! Ticket ID: ${res.data.ticketId}`);
+                        console.log(`[🛡️] Awakening Overlord Agent for autonomous defense...`);
+                        await axios.post(`http://localhost:${PORT}/api/v1/bridge/analyze`, { vulnId: res.data.vulnId });
+                    } catch (err) {
+                        console.log("[-] Red Team Bridge Error:", err.message);
+                    }
+                }
+            }, 2000);
+        });
     } else {
         global.BAYEZID_MODE = 'BLUE';
+        rl.close();
+        startBayezidServer();
     }
-    rl.close();
-    startBayezidServer();
 });
-
 
 process.on('SIGINT', () => {
     console.log('\n[🛑] Graceful Shutdown Initiated...');

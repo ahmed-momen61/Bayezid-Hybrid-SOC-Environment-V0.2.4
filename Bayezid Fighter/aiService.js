@@ -766,6 +766,40 @@ const runAuditorAgent = async(vulnName, remediationCode) => {
     }
 };
 
+const runStealthScribeAgent = async(vulnData) => {
+    console.log(`\n[📝] Scribe Agent is drafting the Stealth Pentest Report...`);
+
+    const prompt = `
+    You are an Elite Offensive Security Reporter (The Scribe).
+    Your Red Team just concluded a Stealth Pentest and found the following critical vulnerability:
+    
+    Vulnerability: ${vulnData.vulnName}
+    Target IP: ${vulnData.targetIp}
+    Severity: ${vulnData.severity}
+    Evidence/Payload: ${vulnData.evidence}
+
+    Task: Write a highly professional, concise Pentest Report (in Markdown format). 
+    Include:
+    1. Executive Summary
+    2. Technical Details & Impact
+    3. Proof of Concept (PoC) based on the evidence
+    4. Recommended Mitigation (Do not apply the fix, just recommend it)
+    `;
+
+    try {
+        const report = await askRedSwarmAI(prompt, false);
+        console.log(`\n=================================================`);
+        console.log(` 🛑 BAYEZID STEALTH PENTEST REPORT (MODE B) 🛑`);
+        console.log(`=================================================\n`);
+        console.log(`\x1b[36m${report}\x1b[0m`);
+        console.log(`\n=================================================`);
+        return report;
+    } catch (error) {
+        console.error("[-] Scribe Agent Error:", error);
+        return null;
+    }
+};
+
 module.exports = {
     analyzeWithVertexAI,
     analyzeWithLocalModel,
@@ -777,5 +811,6 @@ module.exports = {
     runScribeAgent,
     runActionAgent,
     bridgeRedToBlue,
-    applyFixAndVerify
+    applyFixAndVerify,
+    runStealthScribeAgent
 };
