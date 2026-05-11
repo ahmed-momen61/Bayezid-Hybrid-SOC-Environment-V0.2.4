@@ -291,33 +291,49 @@ const orchestrateRedSwarm = async(targetInfo, currentState) => {
     }
 };
 
-const askRedSwarmAI = async(prompt, requireJson = true) => {
+const askRedSwarmAI = async(prompt, requireJson = true, maxRetries = 3) => {
     const cloudModels = [
         "gemini-2.5-flash",
         //"gemini-2.0-flash"
     ];
 
     for (const modelName of cloudModels) {
-        try {
-            const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-            const model = genAI.getGenerativeModel({
-                model: modelName,
-                generationConfig: requireJson ? { responseMimeType: "application/json" } : {}
-            });
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+                const model = genAI.getGenerativeModel({
+                    model: modelName,
+                    generationConfig: requireJson ? { responseMimeType: "application/json" } : {}
+                });
 
-            const response = await model.generateContent(prompt);
-            let text = response.response.text();
+                const response = await model.generateContent(prompt);
+                let text = response.response.text();
 
-            if (requireJson) {
-                text = text.replace(/\\n/g, "\\n").replace(/\\'/g, "\\'").replace(/\\"/g, '\\"').replace(/\\&/g, "\\&").replace(/\\r/g, "\\r").replace(/\\t/g, "\\t").replace(/\\b/g, "\\b").replace(/\\f/g, "\\f");
-                text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
-                return JSON.parse(text);
+                if (requireJson) {
+                    text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
+
+                    text = text.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+
+                    return JSON.parse(text);
+                }
+                return text;
+
+            } catch (error) {
+                const isRetryable = error.message.includes('503') ||
+                    error.message.includes('429') ||
+                    error.message.includes('JSON') ||
+                    error.name === 'SyntaxError';
+
+                if (isRetryable && attempt < maxRetries) {
+                    const waitTime = attempt * 3000;
+                    console.warn(`[⏳] Generation Issue (${error.message.substring(0, 30)}...). Attempt ${attempt}/${maxRetries}. Retrying in ${waitTime/1000}s...`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                    continue;
+                }
+
+                console.warn(`[⚠️] Cloud Model (${modelName}) Failed after ${attempt} attempts. Switching to next...`);
+                break;
             }
-            return text;
-
-        } catch (cloudError) {
-            console.warn(`[⚠️] Cloud Model (${modelName}) Failed: ${cloudError.message}. Switching to next...`);
-            continue;
         }
     }
 
@@ -325,6 +341,7 @@ const askRedSwarmAI = async(prompt, requireJson = true) => {
     console.log(`[🔄] Initiating Last Resort Fallback to Local AI (Ollama/Qwen)...`);
 
     try {
+        const axios = require('axios');
         const localResponse = await axios.post('http://localhost:11434/api/generate', {
             model: process.env.LOCAL_MODEL_NAME || "qwen2.5-coder:7b",
             prompt: prompt + (requireJson ? "\n\nCRITICAL: You MUST return ONLY valid JSON formatting without markdown blocks." : ""),
@@ -335,8 +352,8 @@ const askRedSwarmAI = async(prompt, requireJson = true) => {
         let text = localResponse.data.response;
 
         if (requireJson) {
-            text = text.replace(/\\n/g, "\\n").replace(/\\'/g, "\\'").replace(/\\"/g, '\\"');
             text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
+            text = text.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
             return JSON.parse(text);
         }
         return text;
@@ -800,6 +817,100 @@ const runStealthScribeAgent = async(vulnData) => {
     }
 };
 
+const runVetoAgent = async(userRole, trustScore, vulnName, severity, remediationCode) => {
+    console.log(`\n[🧠] Cognitive RBAC evaluating approval from ${userRole} (Trust Score: ${trustScore})...`);
+
+    const prompt = `You are 'Bayezid-Veto', the AI Gatekeeper for a SOC platform.
+    A user with role '${userRole}' and Trust Score '${trustScore}/100' is attempting to approve an automated fix for a '${severity}' vulnerability: ${vulnName}.
+    
+    Proposed Fix Code:
+    ${remediationCode}
+
+    Your Task:
+    1. Determine if this fix is highly destructive, risky, or impacts business continuity (e.g., dropping databases, blocking all traffic, rebooting servers).
+    2. If the user is a JUNIOR_ANALYST and the fix is risky OR the vulnerability is CRITICAL, you MUST VETO (block) the action.
+    3. If the user is a SENIOR_ANALYST, generally allow it unless the command is catastrophically malformed.
+    4. If the fix is a simple, safe WAF rule or harmless patch, allow the Junior to proceed.
+
+    Strictly return JSON:
+    {
+        "veto_decision": true,
+        "reason": "Brief technical explanation of why this was allowed or blocked."
+    }`;
+
+    try {
+        return await askRedSwarmAI(prompt, true);
+    } catch (error) {
+        console.error("[-] Veto Agent Error:", error.message);
+        return { veto_decision: userRole === 'JUNIOR_ANALYST', reason: "AI Engine offline. Defaulting to safe restriction for Juniors." };
+    }
+};
+
+const runShadowRouterAgent = async(attackerIp, vulnName) => {
+    console.log(`\n[🕸️] Shadow Router Agent activated! Target Attacker: ${attackerIp}`);
+
+    const honeypotIp = process.env.HONEYPOT_IP || "172.18.0.5";
+
+    const prompt = `
+    You are 'Bayezid-Shadow', an Elite Cyber Deception Agent for a SOC.
+    An attacker from IP '${attackerIp}' is exploiting '${vulnName}'.
+    Instead of blocking them, we want to silently route their traffic to an isolated Honeypot (IP: ${honeypotIp}) using iptables DNAT to gather Threat Intelligence (TTPs).
+    
+    Task: 
+    1. Generate the exact iptables NAT command to silently redirect all traffic from ${attackerIp} to ${honeypotIp}.
+    2. Provide a brief psychological/tactical justification (Deception Strategy) for why observing this attacker is better than a simple DROP.
+    
+    Strictly return JSON:
+    {
+        "iptables_command": "sudo iptables -t nat -A PREROUTING -s ...",
+        "deception_strategy": "..."
+    }`;
+
+    try {
+        const strategy = await askRedSwarmAI(prompt, true);
+        console.log(`\n[🕷️] Deception Strategy: ${strategy.deception_strategy}`);
+        console.log(`[⚙️] Executing Shadow Route: ${strategy.iptables_command}`);
+
+        console.log(`[✅] Attacker ${attackerIp} successfully rerouted to Honeypot (${honeypotIp}).`);
+        console.log(`[👁️] Bayezid AI is now monitoring and logging attacker TTPs in the isolated environment...`);
+
+        return strategy;
+    } catch (error) {
+        console.error("[-] Shadow Router Error:", error.message);
+        return null;
+    }
+};
+
+const runForensicRCAAgent = async(vulnName, targetIp, logsSnippet) => {
+    console.log(`\n[🔍] Forensic RCA Agent is investigating the root cause...`);
+
+    const prompt = `
+    You are 'Bayezid-Forensics', a Senior Forensic Analyst.
+    A vulnerability '${vulnName}' was detected and mitigated on target '${targetIp}'.
+    
+    Logs collected during the incident:
+    ${logsSnippet}
+
+    Your Task:
+    1. Identify the 'Root Cause' (e.g., Unsanitized input, outdated library, misconfigured permission).
+    2. Suggest a permanent long-term hardening strategy (Strategic Fix).
+    3. Determine the 'Potential Impact' if this hadn't been caught.
+
+    Strictly return JSON:
+    {
+        "root_cause": "...",
+        "strategic_fix": "...",
+        "potential_impact": "..."
+    }`;
+
+    try {
+        return await askRedSwarmAI(prompt, true);
+    } catch (error) {
+        console.error("[-] Forensics Error:", error.message);
+        return null;
+    }
+};
+
 module.exports = {
     analyzeWithVertexAI,
     analyzeWithLocalModel,
@@ -812,5 +923,8 @@ module.exports = {
     runActionAgent,
     bridgeRedToBlue,
     applyFixAndVerify,
-    runStealthScribeAgent
+    runStealthScribeAgent,
+    runVetoAgent,
+    runShadowRouterAgent,
+    runForensicRCAAgent
 };

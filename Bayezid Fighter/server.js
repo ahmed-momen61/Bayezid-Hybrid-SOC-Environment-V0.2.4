@@ -5,7 +5,7 @@ const dotenv = require('dotenv');
 const { PrismaClient } = require('@prisma/client');
 const path = require('path');
 const { processTuningCommand, liveConfig } = require('./tuningService');
-const { analyzeWithVertexAI, analyzeWithLocalModel, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent, runActionAgent, bridgeRedToBlue, applyFixAndVerify } = require('./aiService');
+const { analyzeWithVertexAI, analyzeWithLocalModel, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent, runActionAgent, bridgeRedToBlue, applyFixAndVerify, runStealthScribeAgent, runVetoAgent, runShadowRouterAgent, runForensicRCAAgent } = require('./aiService');
 const { executePlaybook } = require('./playbookService');
 const { enrichWithOSINT } = require('./osintService');
 const { sendTelegramAlert } = require('./notificationService');
@@ -683,37 +683,28 @@ app.post('/api/v1/bridge/approve-fix', async(req, res) => {
         if (!vuln) return res.status(404).json({ error: "Vulnerability not found" });
 
         if (userId) {
-            const user = await prisma.user.findUnique({ where: { id: userId } });
+            const user = await prisma.user.findUnique({ where: { id: String(userId) } }); // استخدمنا String عشان نتفادى إيرور الـ Int
             if (user) {
-                if (user.role === "JUNIOR_ANALYST" && (vuln.severity === "CRITICAL" || vuln.severity === "HIGH")) {
-                    console.log(`\n[🛑] AI VETO TRIGGERED: User '${user.username}' (JUNIOR) attempted to approve a ${vuln.severity} fix!`);
+                const fixData = JSON.parse(vuln.suggestedFix || "{}");
+                const remediationCode = fixData.remediation_code || "Unknown";
 
-                    await prisma.auditLog.create({
-                        data: {
-                            userId: user.id,
-                            action: "APPROVE_FIX_ATTEMPT",
-                            aiVetoTriggered: true,
-                            aiReasoning: "Junior analysts cannot approve HIGH/CRITICAL fixes without Senior oversight."
-                        }
-                    });
+                const vetoEvaluation = await runVetoAgent(user.role, user.trustScore, vuln.vulnName, vuln.severity, remediationCode);
 
-                    const updatedUser = await prisma.user.update({
+                if (vetoEvaluation.veto_decision) {
+                    console.log(`\n[🛑] AI VETO TRIGGERED: User '${user.username}' blocked! Reason: ${vetoEvaluation.reason}`);
+
+                    await prisma.user.update({
                         where: { id: user.id },
                         data: { trustScore: Math.max(0, user.trustScore - 5) }
                     });
 
                     return res.status(403).json({
                         status: "blocked",
-                        message: "AI VETO: This fix requires SENIOR_ANALYST approval due to high risk.",
-                        trustScore: updatedUser.trustScore
+                        message: `AI VETO: ${vetoEvaluation.reason}`,
+                        trustScore: user.trustScore - 5
                     });
                 }
-
-                console.log(`\n[✅] Approval accepted from '${user.username}' (${user.role}).`);
-                await prisma.user.update({
-                    where: { id: user.id },
-                    data: { trustScore: Math.min(100, user.trustScore + 2) }
-                });
+                console.log(`\n[✅] AI Approved User Action. Reason: ${vetoEvaluation.reason}`);
             }
         }
 
@@ -726,6 +717,39 @@ app.post('/api/v1/bridge/approve-fix', async(req, res) => {
         aiService.applyFixAndVerify(vulnId, "Human Approved");
 
         res.json({ status: "success", message: "Fix approved and is being applied." });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/v1/bridge/isolate', async(req, res) => {
+    const { vulnId, attackerIp } = req.body;
+
+    try {
+        const vuln = await prisma.vulnerabilityBridge.findUnique({ where: { id: vulnId } });
+        if (!vuln) return res.status(404).json({ error: "Vulnerability not found" });
+
+        console.log(`\n[🛡️] Blue Side: Initiating Cognitive Isolation for ID: ${vulnId}`);
+
+        const aiService = require('./aiService');
+        const targetIpToIsolate = attackerIp || "185.20.30.40";
+
+        const isolationResult = await aiService.runShadowRouterAgent(targetIpToIsolate, vuln.vulnName);
+
+        if (isolationResult) {
+            await prisma.vulnerabilityBridge.update({
+                where: { id: vulnId },
+                data: { status: "ISOLATED" }
+            });
+
+            res.json({
+                status: "success",
+                message: "Attacker successfully rerouted to Honeypot.",
+                strategy: isolationResult
+            });
+        } else {
+            res.status(500).json({ error: "Failed to generate isolation strategy." });
+        }
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -769,6 +793,24 @@ const startEscalationWatcher = () => {
     }, 60 * 1000);
 };
 
+app.post('/api/v1/bridge/rca', async(req, res) => {
+    const { vulnId } = req.body;
+    try {
+        const vuln = await prisma.vulnerabilityBridge.findUnique({ where: { id: vulnId } });
+        if (!vuln) return res.status(404).json({ error: "Vulnerability record not found." });
+
+        const mockLogs = `[INFO] Connection from ${vuln.targetIp} - 200 OK\n[WARN] High frequency of SQL keywords detected: DROP, SELECT, FROM\n[ERROR] Database error at line 45: Syntax error near 'DROP'`;
+
+        const rcaReport = await runForensicRCAAgent(vuln.vulnName, vuln.targetIp, mockLogs);
+
+        res.json({
+            status: "success",
+            report: rcaReport
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
 app.post('/api/v1/system/tune', async(req, res) => {
     const { command, role } = req.body;
@@ -970,6 +1012,40 @@ rl.question('\nEnter your choice (1 or 2): ', (answer) => {
         global.BAYEZID_MODE = 'BLUE';
         rl.close();
         startBayezidServer();
+    }
+});
+
+app.post('/api/v1/bridge/isolate', async(req, res) => {
+    const { vulnId, attackerIp } = req.body;
+
+    try {
+        const vuln = await prisma.vulnerabilityBridge.findUnique({ where: { id: vulnId } });
+        if (!vuln) return res.status(404).json({ error: "Vulnerability not found" });
+
+        const finalIpToIsolate = attackerIp || vuln.targetIp;
+
+        if (!finalIpToIsolate) {
+            return res.status(400).json({ error: "Attacker IP not provided and not found in vulnerability record." });
+        }
+
+        console.log(`\n[🛡️] Blue Side: Initiating Cognitive Isolation for Target: ${finalIpToIsolate}`);
+
+        const isolationResult = await runShadowRouterAgent(finalIpToIsolate, vuln.vulnName);
+
+        if (isolationResult) {
+            await prisma.vulnerabilityBridge.update({
+                where: { id: vulnId },
+                data: { status: "ISOLATED" }
+            });
+
+            res.json({
+                status: "success",
+                message: `Attacker (${finalIpToIsolate}) successfully rerouted to Honeypot.`,
+                strategy: isolationResult
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 });
 
