@@ -1,11 +1,12 @@
 const express = require('express');
+const net = require('net');
 const cors = require('cors');
 const readline = require('readline');
 const dotenv = require('dotenv');
 const { PrismaClient } = require('@prisma/client');
 const path = require('path');
 const { processTuningCommand, liveConfig } = require('./tuningService');
-const { analyzeWithVertexAI, analyzeWithLocalModel, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent, runActionAgent, bridgeRedToBlue, applyFixAndVerify, runStealthScribeAgent, runVetoAgent, runShadowRouterAgent, runForensicRCAAgent } = require('./aiService');
+const { smartExec, analyzeWithVertexAI, analyzeWithLocalModel, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent, runActionAgent, bridgeRedToBlue, applyFixAndVerify, runStealthScribeAgent, runVetoAgent, runShadowRouterAgent, runForensicRCAAgent, executeAlchemistFuzzingLoop, runMirageAgent } = require('./aiService');
 const { executePlaybook } = require('./playbookService');
 const { enrichWithOSINT } = require('./osintService');
 const { sendTelegramAlert } = require('./notificationService');
@@ -14,6 +15,7 @@ const { enrichWithCTI } = require('./ctiService');
 const { findSimilarIncidents, saveIncidentToMemory } = require('./memoryService');
 const crypto = require('crypto');
 const itsmService = require('./itsmService');
+const { analyzeLogFastLive } = require('./kineticFilter');
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
 const IV_LENGTH = 16;
@@ -629,6 +631,19 @@ app.post('/api/v1/redswarm/auto-pilot', async(req, res) => {
 
 app.post('/api/v1/bridge/report-vuln', async(req, res) => {
     const { vulnName, severity, detectedBy, targetIp, evidence } = req.body;
+
+
+    const sourceIp = req.ip || req.connection.remoteAddress || targetIp || "Unknown";
+    console.log(`\n[⚡] Kinetic Filter analyzing incoming telemetry from ${sourceIp}...`);
+
+    const triageResult = analyzeLogFastLive(sourceIp, req.body);
+
+    if (!triageResult.isSuspicious) {
+        console.log(`[♻️] Kinetic Filter Dropped Event: ${triageResult.reason}`);
+        return res.json({ status: "ignored", message: triageResult.reason });
+    }
+
+    console.log(`[🚨] Kinetic Filter Alert: ${triageResult.reason}. Escalating to Cognitive AI Engine!`);
     try {
         const ticketId = await itsmService.createTicket(vulnName, severity, targetIp);
 
@@ -961,7 +976,7 @@ rl.question('\nEnter your choice (1 or 2): ', (answer) => {
                     console.log(`\n[⚔️] Initializing RedSwarm Agents for Live Target Scan on ${targetIp}...`);
 
                     try {
-                        const { runScoutAgent, runBreacherAgent, runStealthScribeAgent } = require('./aiService');
+                        const { runScoutAgent, runBreacherAgent, runStealthScribeAgent, executeAlchemistFuzzingLoop } = require('./aiService');
                         const axios = require('axios');
 
                         console.log(`\n[🔍] Scout Agent is scanning the target...`);
@@ -972,20 +987,23 @@ rl.question('\nEnter your choice (1 or 2): ', (answer) => {
                             process.exit(0);
                         }
 
-                        console.log(`\n[⚔️] Breacher Agent is analyzing scan results and attempting exploit...`);
-                        const breachData = await runBreacherAgent(targetIp, scoutData.scan_results, "Focus on RCE, LFI, SSRF, or SQLi.");
+                        console.log(`\n[🧪] Awakening The Alchemist: Initiating Adaptive Exploit Mutation (Live Execution)...`);
 
-                        if (!breachData || !breachData.best_payload) {
-                            console.log("[-] Breacher could not find a viable exploit path.");
+                        const scanContext = scoutData.scan_results ? scoutData.scan_results.substring(0, 200) : "Unknown Open Ports";
+
+                        const alchemistData = await executeAlchemistFuzzingLoop(scanContext, targetIp, 3);
+
+                        if (!alchemistData || !alchemistData.mutated_payload) {
+                            console.log("[-] Alchemist could not bypass defenses or find a viable exploit path.");
                             process.exit(0);
                         }
 
                         const realVuln = {
-                            vulnName: breachData.threat_type || "Unknown Critical Vulnerability",
+                            vulnName: "Adaptive Mutated Exploit (Alchemist Bypass)",
                             severity: "CRITICAL",
-                            detectedBy: "RedSwarm Breacher Agent",
+                            detectedBy: "RedSwarm Alchemist Agent",
                             targetIp: targetIp,
-                            evidence: breachData.best_payload
+                            evidence: alchemistData.mutated_payload
                         };
 
                         console.log(`\n[🚨] Real Threat Detected: ${realVuln.vulnName}`);
@@ -1047,6 +1065,109 @@ app.post('/api/v1/bridge/isolate', async(req, res) => {
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
+});
+
+app.post('/api/v1/red/alchemist', async(req, res) => {
+    const { targetIp, vulnContext, maxMutations } = req.body;
+
+    if (!targetIp) {
+        return res.status(400).json({ error: "Target IP is required." });
+    }
+
+    try {
+        console.log(`\n[🚀] Postman Trigger: Launching Alchemist Attack Loop on ${targetIp}`);
+
+        const result = await executeAlchemistFuzzingLoop(
+            vulnContext || "General vulnerability exploitation",
+            targetIp,
+            maxMutations || 3
+        );
+
+        if (result) {
+            res.json({
+                status: "success",
+                message: "Alchemist successfully bypassed defenses via Live Execution.",
+                finalPayload: result.mutated_payload,
+                techniqueUsed: result.obfuscation_technique
+            });
+        } else {
+            res.status(418).json({
+                status: "failed",
+                message: "Alchemist exhausted all mutation attempts without gaining access."
+            });
+        }
+    } catch (error) {
+        console.error("[-] Alchemist API Error:", error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+const HONEYPOT_PORT = 2222;
+
+const honeypotServer = net.createServer((socket) => {
+    console.log(`\n[🚨] HONEYPOT ALERT: Incoming connection from ${socket.remoteAddress}`);
+
+    socket.write("Ubuntu 22.04.1 LTS (Bayezid Secure Subsystem)\n");
+    socket.write("login: root\n");
+    socket.write("root@ubuntu:~# ");
+
+    let commandTracker = "";
+
+    socket.on('data', async(data) => {
+        const chunk = data.toString();
+
+        if (chunk === '\b' || chunk === '\x7f') {
+            if (commandTracker.length > 0) {
+                commandTracker = commandTracker.slice(0, -1);
+                socket.write('\b \b');
+            }
+            return;
+        }
+
+        commandTracker += chunk;
+
+        if (!chunk.includes('\n') && !chunk.includes('\r')) {
+            return;
+        }
+
+        const command = commandTracker.trim();
+        commandTracker = "";
+
+        if (!command) {
+            socket.write("root@ubuntu:~# ");
+            return;
+        }
+
+        if (command === 'exit' || command === 'quit') {
+            socket.write("logout\n");
+            socket.end();
+            return;
+        }
+
+        console.log(`[🕸️] Hacker typed in Honeypot: ${command}`);
+        socket.write("\nExecuting...\n");
+
+        try {
+            const execResult = await smartExec(command, 5000, false);
+            let realOutput = execResult.stdout || execResult.stderr || "No output returned.";
+
+            const weaponizedOutput = await runMirageAgent(command, realOutput);
+
+            socket.write(weaponizedOutput + "\nroot@ubuntu:~# ");
+        } catch (err) {
+            let realError = err.stderr || err.stdout || err.message;
+            const weaponizedError = await runMirageAgent(command, `OS Error: ${realError}`);
+            socket.write(weaponizedError + "\nroot@ubuntu:~# ");
+        }
+    });
+
+    socket.on('error', (err) => {
+        console.log(`[🕸️] Honeypot socket closed or error: ${err.message}`);
+    });
+});
+
+honeypotServer.listen(HONEYPOT_PORT, () => {
+    console.log(`[🕸️] Live High-Interaction Honeypot listening on TCP Port ${HONEYPOT_PORT}...`);
 });
 
 process.on('SIGINT', () => {
