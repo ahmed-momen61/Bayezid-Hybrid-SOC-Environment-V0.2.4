@@ -14,7 +14,10 @@ const execPromise = util.promisify(exec);
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-
+const k8s = require('@kubernetes/client-node');
+const kc = new k8s.KubeConfig();
+kc.loadFromDefault();
+const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
 const smartExec = async(command, timeoutMs, isBackground) => {
     if (isBackground) {
         const logFile = path.join(__dirname, `job_${Date.now()}.log`);
@@ -1033,38 +1036,84 @@ const runMirageAgent = async(hackerCommand, realOsOutput) => {
 };
 
 const runWardenSandbox = async(suspiciousPayload) => {
-    console.log(`\n[🦠] The Warden is spinning up an isolated Docker Sandbox for dynamic analysis...`);
-
-    const fs = require('fs');
-    const path = require('path');
-    const payloadFile = path.join(__dirname, 'temp_malware.sh');
-    fs.writeFileSync(payloadFile, suspiciousPayload);
+    console.log(`\n[☸️] The Warden is orchestrating a Kubernetes Native Sandbox...`);
+    const crypto = require('crypto');
 
     let analysisLogs = "";
+    const podId = crypto.randomBytes(4).toString('hex');
+    const podName = `warden-sandbox-${podId}`;
+    const namespace = 'default';
+
+    const podManifest = {
+        apiVersion: 'v1',
+        kind: 'Pod',
+        metadata: { name: podName, labels: { app: 'warden-sandbox' } },
+        spec: {
+            containers: [{
+                name: 'malware-analyzer',
+                image: 'ubuntu:latest',
+                imagePullPolicy: 'IfNotPresent',
+                command: ['/bin/sh', '-c'],
+                args: [`echo "${suspiciousPayload.replace(/"/g, '\\"')}" > /tmp/malware.sh && chmod +x /tmp/malware.sh && timeout 30s /tmp/malware.sh || true; sleep 2`],
+                resources: {
+                    limits: { memory: '256Mi', cpu: '500m' },
+                    requests: { memory: '128Mi', cpu: '250m' }
+                }
+            }],
+            restartPolicy: 'Never'
+        }
+    };
 
     try {
+        console.log(`[☸️] Creating Ephemeral Pod: ${podName}...`);
 
-        const dockerCmd = `docker run --rm --network none --memory="512m" --cpus="0.5" -v "${payloadFile}:/tmp/malware.sh" ubuntu:latest bash -c "timeout 5s bash /tmp/malware.sh"`;
+        await k8sApi.createNamespacedPod({ namespace: namespace, body: podManifest });
 
-        console.log(`[🦠] Executing Payload in Docker: ${dockerCmd}`);
-        const execResult = await smartExec(dockerCmd, 10000, false);
+        console.log(`[⏳] Waiting for execution to complete...`);
+        let isDone = false;
+        for (let i = 0; i < 90; i++) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            try {
+                const response = await k8sApi.readNamespacedPod({ name: podName, namespace: namespace });
 
-        analysisLogs = `[Warden Sandbox Execution Output]\nSTDOUT: ${execResult.stdout}\nSTDERR: ${execResult.stderr}`;
+                const podStatus = response.status ? response.status.phase : (response.body && response.body.status ? response.body.status.phase : null);
 
-    } catch (err) {
-        let realError = err.stderr || err.stdout || err.message;
-        analysisLogs = `[Warden Sandbox Execution Terminated]\nReason/Error: ${realError}`;
-    } finally {
-        if (fs.existsSync(payloadFile)) {
-            fs.unlinkSync(payloadFile);
+                if (podStatus === 'Succeeded' || podStatus === 'Failed') {
+                    isDone = true;
+                    break;
+                }
+            } catch (pollErr) {}
         }
+
+        if (!isDone) console.log(`[⚠️] Sandbox execution timed out!`);
+
+        console.log(`[📝] Extracting logs from ${podName}...`);
+        let logs = "No Output.";
+        try {
+            const logResponse = await k8sApi.readNamespacedPodLog({ name: podName, namespace: namespace });
+            logs = typeof logResponse === 'string' ? logResponse : (logResponse.body ? logResponse.body : JSON.stringify(logResponse));
+        } catch (logErr) {
+            logs = "Failed to extract logs.";
+        }
+
+        analysisLogs = `[Kubernetes Sandbox Execution Output]\nSTDOUT/STDERR:\n${logs}`;
+
+        console.log(`[🔥] Terminating sandbox pod ${podName}...`);
+        await k8sApi.deleteNamespacedPod({ name: podName, namespace: namespace });
+
+    } catch (error) {
+        console.error(`[❌] Kubernetes Error:`, error.message);
+        analysisLogs = `[Kubernetes Sandbox Execution Terminated]\nReason/Error: ${error.message}`;
+        try {
+            await k8sApi.deleteNamespacedPod({ name: podName, namespace: namespace });
+        } catch (cleanupError) {}
     }
 
-    console.log(`[🦠] Warden execution completed. Analyzing behavioral logs with AI...`);
+    console.log(`[🦠] Warden K8s execution completed. Analyzing behavioral logs with AI...`);
 
     const prompt = `
     You are 'Bayezid-Warden', a Dynamic Malware Analysis Expert.
-    I executed a suspicious payload inside a secure Sandbox.
+    I executed a suspicious payload inside a secure Kubernetes Sandbox.
 
     Here are the raw execution logs:
     """

@@ -101,5 +101,35 @@ async def update_model(req: Request):
     
     return {"status": "error", "message": "No payload provided."}
 
+@app.post("/api/v1/ml/swarm_feedback")
+async def swarm_update(req: Request):
+    global normal_traffic, clf
+    data = await req.json()
+    features = data.get("features")
+    
+    if features:
+        try:
+            new_array = np.array([[
+                float(features.get("length", 0)),
+                float(features.get("special_chars", 0)),
+                float(features.get("entropy", 0.0)),
+                float(features.get("keyword_count", 0))
+            ]])
+            
+            normal_traffic = np.vstack([normal_traffic, new_array])
+            clf.fit(normal_traffic)
+            
+            np.save(DATA_FILE, normal_traffic)
+            joblib.dump(clf, MODEL_FILE)
+            
+            print(f"\n[🐝] SWARM ASSIMILATION: ML Engine learned a new Zero-Day pattern.")
+            print(f"[📊] Training set size increased to: {len(normal_traffic)} samples.")
+            return {"status": "success", "message": "Swarm features integrated."}
+        except Exception as e:
+            print(f"[⚠️] Swarm ML Error: {str(e)}")
+            return {"status": "error", "message": str(e)}
+            
+    return {"status": "failed", "message": "No features provided"}
+
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")

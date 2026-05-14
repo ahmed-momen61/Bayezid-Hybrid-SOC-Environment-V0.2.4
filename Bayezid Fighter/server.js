@@ -1226,13 +1226,13 @@ app.post('/api/v1/swarm/sync', async(req, res) => {
     console.log(`[🧠] Features assimilated: Entropy=${features.entropy}, Symbols=${features.special_chars}`);
 
     try {
-        await axios.post('http://127.0.0.1:8000/api/v1/ml/feedback_features', {
+        await axios.post('http://127.0.0.1:8000/api/v1/ml/swarm_feedback', {
             features: features
         });
         console.log(`[✅] Neural Engine updated with Swarm Intel.`);
-        res.json({ status: "success", message: "Intel assimilated." });
+        res.json({ status: "success", message: "Intel assimilated into ML Model." });
     } catch (error) {
-        console.log(`[⚠️] Failed to update Neural Engine with Swarm Intel.`);
+        console.log(`[⚠️] Failed to update Neural Engine with Swarm Intel. Is main.py running?`);
         res.status(500).json({ error: "Engine update failed" });
     }
 });

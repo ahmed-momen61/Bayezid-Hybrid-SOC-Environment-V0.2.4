@@ -12,6 +12,7 @@
     "dependencies": {
         "@google-cloud/vertexai": "^1.10.0",
         "@google/generative-ai": "^0.24.1",
+        "@kubernetes/client-node": "^1.4.0",
         "@prisma/client": "^6.19.2",
         "axios": "^1.13.6",
         "cors": "^2.8.6",
