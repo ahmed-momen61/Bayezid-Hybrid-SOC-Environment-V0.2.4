@@ -76,11 +76,11 @@ const WargamingEngine = {
         const updatedVault = [...currentVault, ...rules];
         fs.writeFileSync(vaultPath, JSON.stringify(updatedVault, null, 2));
         console.log(`[🛡️] IMMUNITY: ${rules.length} new rules added to the Vault.`);
+
         rules.forEach(rule => WargamingEngine.broadcastSwarmRule(rule));
     },
-};
 
-broadcastSwarmRule: async(rule) => {
+    broadcastSwarmRule: async(rule) => {
         if (SWARM_NODES.length === 0) return;
 
         console.log(`[🌐] HYDRA: Broadcasting new rule [${rule.rule_name}] to Swarm Nodes...`);
@@ -98,6 +98,7 @@ broadcastSwarmRule: async(rule) => {
                 console.log(`[⚠️] HYDRA: Failed to reach node ${node}`);
             }
         }
-    },
+    }
+};
 
-    module.exports = WargamingEngine;
+module.exports = WargamingEngine;
