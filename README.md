@@ -1,5 +1,9 @@
-# Bayezid Hybrid SOC Environment V0.3.4 (The Closed-Loop Adaptive Defense Update)
+# Bayezid Hybrid SOC Environment V0.3.4 (The Generative Deception & Collective Immunity Update)
 
+![AI-Powered](https://img.shields.io/badge/AI-Waterfall_Swarm-orange.svg)
+![Deception](https://img.shields.io/badge/Defense-Generative_Matrix-blue.svg)
+![Wargaming](https://img.shields.io/badge/Evolution-GAN_Wargaming-red.svg)
+![Immunity](https://img.shields.io/badge/Immunity-Hydra_Protocol-green.svg)
 ![Version](https://img.shields.io/badge/Version-3.4-red.svg)
 ![Node.js](https://img.shields.io/badge/Node.js-20.x-green.svg)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
@@ -19,6 +23,14 @@ By merging **Vector-Based Institutional Memory**, **Encrypted Swarm Intelligence
 
 Bayezid is engineered to solve the "Big Three" SOC challenges: Alert Fatigue, Vendor Lock-in, and Cognitive Overhead, while introducing state-of-the-art offensive capabilities, autonomous remediation, and a globally connected **Self-Learning Architecture**.
 
+* **AI Waterfall Orchestration (RedSwarm Core):** A resilient triple-tier AI logic. Requests route through **Gemini 1.5/2.0**, fall back to **Groq LPU** for speed, and finally to **Local Qwen 2.5** for uncensored or offline operations.
+
+* **The Matrix Shell (Generative Deception):** Instead of simple blocking, Bayezid traps attackers in an LLM-driven virtual environment (Ports 2222/8080). The AI simulates a full Linux OS to study attacker TTPs in isolation.
+
+* **GAN Wargaming (Generative Adversarial Defense):** A self-training arena. The **Red Agent** (Local) creates payloads, while the **Blue Agent** (Cloud) synthesizes **Kinetic Regex Rules**. This creates a "Self-Healing" vaccine.
+
+* **The Hydra Protocol (Collective Immunity):** Using **RSA-2048 signing**, nodes share verified defense rules. Receiving nodes perform a **Hot-Reload** into RAM, achieving network-wide immunity without a restart.
+
 * **Live Kinetic Filter (The Fast Shield):** A true live in-memory filter acting as the first line of defense. It features a **Deep Payload Normalizer** (Double URL Decoding & Null-Byte Stripping) and a **Flexible Regex Engine** to catch obfuscated SQLi/XSS.
 
 * **ML Hash Caching (Zero-CPU Shield):** Before invoking complex analysis, Bayezid hashes incoming payloads. If a known threat reappears, the Intelligence Cache drops it in **<0.01ms** (Zero-CPU footprint), rendering DDoS attacks using malicious payloads ineffective.
@@ -29,7 +41,7 @@ Bayezid is engineered to solve the "Big Three" SOC challenges: Alert Fatigue, Ve
 
 * **Encrypted Swarm Intelligence (Federated Learning):** Bayezid nodes (e.g., across different ministries or branches) share Zero-Day mathematical features (not raw sensitive payloads) with each other. Using **RSA-2048 asymmetric cryptography** (`swarmCrypto.js`), nodes verify the signature of incoming intel, instantly retraining the local ML model (`/api/v1/ml/swarm_feedback`) to immunize the entire network against a threat seen by only one node.
 
-* **L3 OS Network Striker (The Guillotine):** Operates at the network layer (Windows Firewall/eBPF) to instantly drop malicious IPs (`kernelStriker.js`). It includes an autonomous TTL daemon that automatically expires blocks after 24 hours to prevent memory exhaustion and IP blocking bloat.
+* **L3 OS Network Striker (Counter-Recon & Execution):** Operates at the network layer (Windows Firewall/eBPF) to instantly drop malicious IPs. Before execution, it performs **Active Fingerprinting** via Reverse OSINT and Nmap scans to document the attacker's ISP, location, and infrastructure for forensic reporting. Includes an autonomous TTL daemon that automatically expires blocks after 24 hours.
 
 * **The Oracle Agent (Reverse Engineering):** A dedicated Local AI (Qwen/Ollama) agent that deobfuscates intercepted payloads and translates raw bash/execution logs from the Kubernetes sandbox into human-readable intent analysis for Forensic RCA reports.
 
@@ -83,6 +95,8 @@ When toggled to **RED MODE**, Bayezid activates a proactive, fully autonomous of
 | **`kineticFilter.js`** | ML Hash Caching, Deep Normalization, Flexible Regex | JavaScript |
 | **`oracleAgent.js`** | Payload deobfuscation and intent reverse-engineering | Local LLM |
 | **`threatGrapher.js`** | Generates dynamic Mermaid.js threat flowcharts for reports | JavaScript / Markdown |
+| **`wargamingEngine.js`** | Autonomous GAN Arena & Hydra Broadcasting | Local LLM |
+| **`matrixShell.js`** | Generative Deception Shell (SSH/Telnet Emulation) | Node.js Net / LLM |
 
 ---
 
@@ -125,6 +139,14 @@ You can test the core AI capabilities via these bridge endpoints using Postman:
 * `POST /api/v1/bridge/rca`
 * Body: `{ "vulnId": "<UUID>" }`
 
+**5. Launch GAN Wargaming (Self-Evolution)**
+* `POST /api/v1/wargaming/start`
+* Body: `{ "targetAsset": "Production API" }`
+
+**6. Zero-Day Forge (Exploit Synthesis)**
+* `POST /api/v1/forge/generate`
+* Body: `{ "vulnContext": "Outdated Apache Struts" }`
+
 ---
 
 ## Environment Variables (.env)
@@ -138,6 +160,7 @@ DIRECT_URL="postgresql://<USER>:<PASSWORD>@<HOST>:<PORT>/<DATABASE>"
 AI_MODE=CLOUD
 GEMINI_API_KEY="AIzaSy_YOUR_GEMINI_API_KEY_HERE"
 GOOGLE_API_KEY="AIzaSy_YOUR_GOOGLE_API_KEY_HERE"
+GROQ_API_KEY="gsk_OUR_GROQ_API_KEY_HERE"
 LOCAL_MODEL_NAME="qwen2.5-coder:7b"
 OLLAMA_BASE_URL="http://localhost:11434"
 
@@ -154,6 +177,7 @@ OPENCTI_TOKEN="your_opencti_token_here"
 
 SLA_TIMEOUT_MINUTES=5
 
+SWARM_NODES="http://node2.agency.gov,http://node3.agency.gov"
 ```
 
 ---
