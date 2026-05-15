@@ -77,7 +77,7 @@ const WargamingEngine = {
         fs.writeFileSync(vaultPath, JSON.stringify(updatedVault, null, 2));
         console.log(`[🛡️] IMMUNITY: ${rules.length} new rules added to the Vault.`);
         rules.forEach(rule => WargamingEngine.broadcastSwarmRule(rule));
-    }
+    },
 };
 
 broadcastSwarmRule: async(rule) => {
