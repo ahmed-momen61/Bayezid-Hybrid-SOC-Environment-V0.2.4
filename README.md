@@ -185,3 +185,8 @@ SWARM_NODES="http://node2.agency.gov,http://node3.agency.gov"
 **Bayezid Fighter** — **Yildirim Logic — The Strike Before the Signal**
 
 Developed by: **Ahmed Mo'men Ahmed** | 2026.
+
+<p align="center">
+<img src="assets/FL.png" width="300" alt="Bayezid Fighter Logo">
+<br>
+
