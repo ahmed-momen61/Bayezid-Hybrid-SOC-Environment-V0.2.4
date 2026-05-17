@@ -254,6 +254,7 @@ const handleSecurityAlert = async(req, res) => {
             const weaponizedPayload = await runZeroDayForgeAgent(aiResponse.threat_type, 1);
 
             if (weaponizedPayload && weaponizedPayload.weaponizedCode) {
+                const actual_target = (target_server !== 'Unknown' && target_server !== 'Detecting...') ? target_server : (req.body.destination_ip || aiResponse.extracted_ip || 'localhost');
                 console.log(`[🔥] LIVE FIRE: Alchemist attacking ${target_server} to verify patch integrity...`);
                 const attackResult = await executeAlchemistFuzzingLoop(weaponizedPayload.weaponizedCode, target_server, 1);
 
