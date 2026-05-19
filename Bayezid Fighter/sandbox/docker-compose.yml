@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  sigma-sandbox:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    container_name: bayezid-sigma-sandbox
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -39,6 +39,7 @@ const SwarmCrypto = require('./swarmCrypto');
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
 const IV_LENGTH = 16;
 const { startMatrixShell } = require('./matrixShell');
+const { startSigmaSymbioticLoop } = require('./sigmaEngine');
 
 function encryptEvidence(text) {
     let iv = crypto.randomBytes(IV_LENGTH);
@@ -1214,6 +1215,12 @@ app.post('/api/v1/swarm/sync', async(req, res) => {
     }
 });
 
+app.post('/api/v1/sigma-live/start', async(req, res) => {
+    console.log(`\n[🚀] API Triggered: Starting SIGMA-LIVE Symbiotic Loop...`);
+    // Run asynchronously to not block the response
+    startSigmaSymbioticLoop();
+    res.json({ status: "success", message: "SIGMA-LIVE Symbiotic Loop initiated. Check server logs." });
+});
 
 process.on('SIGINT', () => {
     console.log('\n[🛑] Graceful Shutdown Initiated...');

@@ -11,6 +11,10 @@ const {
 } = require('./aiService');
 const itsmService = require('./itsmService');
 
+// Autonomous Matrix Hardening Variables (Project SIGMA-LIVE)
+let dynamicLethalPatterns = ['wget', 'curl', 'nc', 'bash', 'sh', 'python', 'perl', 'php', 'ruby', 'chmod', '\\.\\/', 'base64'];
+let dynamicPromptAdditions = [];
+
 const getSmartResponse = async(prompt) => {
     //try {
     //  let geminiRes = await analyzeWithVertexAI(prompt);
@@ -118,7 +122,9 @@ const startMatrixShell = (port = 2222) => {
                 connState.mlSyncCounter = 0;
             }
 
-            const lethalRegex = /(wget|curl|nc|bash|sh|python|perl|php|ruby|chmod|\.\/|base64)/i;
+            // Dynamic Regex built from Autonomous Hardening
+            const dynamicRegexStr = `(${dynamicLethalPatterns.join('|')})`;
+            const lethalRegex = new RegExp(dynamicRegexStr, 'i');
             if (lethalRegex.test(cmd)) {
                 console.log(`[⚠️] MATRIX PIVOT: Lethal payload detected! Routing to K8s Warden...`);
                 socket.write("Executing...\r\n");
@@ -165,7 +171,8 @@ Current Command Executed: "${cmd}"
 - NEVER print system labels like [COMMAND HISTORY] or [FILESYSTEM].
 - NO conversational text. NO explanations. NO greetings.
 - NO Markdown formatting (do not use \`\`\` or \`\`\`bash).
-- If the command produces no output (like 'cd', 'export', or 'mkdir'), return absolutely nothing (an empty string).`;
+- If the command produces no output (like 'cd', 'export', or 'mkdir'), return absolutely nothing (an empty string).
+${dynamicPromptAdditions.length > 0 ? '\n[AUTONOMOUS HARDENING RULES (SIGMA-LIVE)]\n' + dynamicPromptAdditions.map((r, i) => `${i + 1}. ${r}`).join('\n') : ''}`;
 
                 let fakeOutput = await getSmartResponse(matrixPrompt);
 
@@ -256,4 +263,28 @@ const triggerTargetedRedTeamPentest = async(asset, vector) => {
     }
 };
 
-module.exports = { startMatrixShell };
+const applyGradientUpdate = (update) => {
+    console.log(`\n[⚙️] MATRIX SYSTEM: Applying Gradient Update from SIGMA-LIVE...`);
+    console.log(`    - Vector Blocked: ${update.vector}`);
+    console.log(`    - Reason: ${update.reason}`);
+    
+    // 1. Extract potential new lethal keywords from the vector
+    const parts = update.vector.split(' ');
+    const primaryCmd = parts[0];
+    
+    // Add to dynamic blocklist if it's not already there
+    if (!dynamicLethalPatterns.includes(primaryCmd)) {
+        // Escape special chars just in case
+        const safeCmd = primaryCmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        dynamicLethalPatterns.push(safeCmd);
+        console.log(`    [+] Added '${safeCmd}' to Lethal Regex Blocklist.`);
+    }
+    
+    // 2. Add dynamic instruction to prompt to explicitly hallucinate failure for this vector
+    const rule = `If the user attempts to run commands resembling '${update.vector}', simulate a realistic execution failure (e.g., 'segmentation fault', 'permission denied', or an infinite loop hanging).`;
+    dynamicPromptAdditions.push(rule);
+    console.log(`    [+] Added new Cognitive Deception Rule to Neural Prompt.`);
+    console.log(`[✔] MATRIX SYSTEM: Autonomous Hardening Complete.\n`);
+};
+
+module.exports = { startMatrixShell, applyGradientUpdate };
